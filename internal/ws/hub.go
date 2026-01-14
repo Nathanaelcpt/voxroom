@@ -31,17 +31,16 @@ func (h *Hub) Run() {
 			}
 			h.Rooms[client.RoomID][client] = true
 
-			// 🔴 SIMPAN EVENT
 			_ = room.SaveEvent(client.RoomID, client.UserID, "JOIN")
 
-			// 🔴 KIRIM KE DIRI SENDIRI (INI YANG HILANG)
+			// kirim ke diri sendiri
 			client.Send <- Message{
 				Type:   "USER_JOIN",
 				UserID: client.UserID,
 				RoomID: client.RoomID,
 			}
 
-			// 🔴 BROADCAST KE ORANG LAIN
+			// broadcast ke user lain
 			for c := range h.Rooms[client.RoomID] {
 				if c != client {
 					c.Send <- Message{
@@ -66,6 +65,12 @@ func (h *Hub) Run() {
 						RoomID: client.RoomID,
 					}
 				}
+			}
+
+		// ===== 🔥 BROADCAST (INI YANG WAJIB ADA) =====
+		case msg := <-h.Broadcast:
+			for c := range h.Rooms[msg.RoomID] {
+				c.Send <- msg
 			}
 		}
 	}

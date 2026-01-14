@@ -1,9 +1,11 @@
 package ws
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"voxroom/internal/auth"
+	"voxroom/internal/room"
 
 	"github.com/gorilla/websocket"
 )
@@ -39,18 +41,18 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		Conn:   conn,
-		Send:   make(chan Message, 10), // buffer WAJIB
+		Send:   make(chan Message, 10),
 		UserID: userID,
 		RoomID: roomID,
 	}
 
-	// 🔴 1. WritePump dulu (hindari race)
+	// 1️⃣ WritePump dulu
 	go client.WritePump()
 
-	// 🔴 2. Register ke hub
+	// 2️⃣ Register ke hub
 	hub.Register <- client
 
-	// 🔴 3. Read loop (biar WS hidup)
+	// 3️⃣ Read loop (TERIMA MESSAGE DARI CLIENT)
 	go func() {
 		defer func() {
 			hub.Unregister <- client
@@ -58,8 +60,30 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		}()
 
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
 				return
+			}
+
+			var msg Message
+			if err := json.Unmarshal(data, &msg); err != nil {
+				continue
+			}
+
+			// 🔴 HANDLE TRANSKRIP
+			if msg.Type == "TRANSCRIPT" {
+				msg.UserID = client.UserID
+				msg.RoomID = client.RoomID
+
+				// simpan ke DB (partition)
+				_ = room.SaveTranscript(
+					msg.RoomID,
+					msg.UserID,
+					msg.Text,
+				)
+
+				// broadcast ke room
+				hub.Broadcast <- msg
 			}
 		}
 	}()
