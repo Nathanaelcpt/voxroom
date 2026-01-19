@@ -32,12 +32,27 @@ func main() {
 		ws.ServeWS(hub, w, r)
 	})
 
+	// 🔹 Port (Render pakai PORT env)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // fallback lokal
+		port = "8080"
 	}
 
-	log.Println("🚀 Server running on :" + port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
-}
+	// 🔹 CORS Middleware (WAJIB UNTUK FRONTEND VERCEL)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
+		// Handle preflight
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		http.DefaultServeMux.ServeHTTP(w, r)
+	})
+
+	log.Println("🚀 Server running on :" + port)
+	log.Fatal(http.ListenAndServe(":"+port, handler))
+}
