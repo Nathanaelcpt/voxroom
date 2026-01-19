@@ -40,3 +40,4 @@ func main() {
 	log.Println("🚀 Server running on :" + port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
+
