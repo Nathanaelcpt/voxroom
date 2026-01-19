@@ -28,12 +28,15 @@ func main() {
 	// 🔹 HTTP routes
 	http.HandleFunc("/register", auth.RegisterHandler)
 	http.HandleFunc("/login", auth.LoginHandler)
-
-	// 🔹 WebSocket endpoint
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
 	})
 
-	log.Println("🚀 Server running on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // fallback lokal
+	}
+
+	log.Println("🚀 Server running on :" + port)
+	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
