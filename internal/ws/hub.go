@@ -27,8 +27,13 @@ func (h *Hub) Run() {
 			h.Rooms[client.RoomID][client] = true
 
 		case client := <-h.Unregister:
-			if _, ok := h.Rooms[client.RoomID][client]; ok {
+			if h.Rooms[client.RoomID] != nil {
 				delete(h.Rooms[client.RoomID], client)
+
+				// optional: bersihkan room kosong
+				if len(h.Rooms[client.RoomID]) == 0 {
+					delete(h.Rooms, client.RoomID)
+				}
 			}
 
 		case msg := <-h.Broadcast:

@@ -10,7 +10,7 @@ import (
 func SaveEvent(roomID, userID, eventType string) error {
 	_, err := db.Pool.Exec(
 		context.Background(),
-		`INSERT INTO session_events (room_id, user_id, event_type, created_at)
+		`INSERT INTO room_events (room_id, user_id, event_type, created_at)
 		 VALUES ($1, $2, $3, $4)`,
 		roomID,
 		userID,

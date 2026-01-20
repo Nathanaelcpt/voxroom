@@ -7,6 +7,7 @@ import (
 
 	"voxroom/internal/auth"
 	"voxroom/internal/db"
+	"voxroom/internal/webrtc"
 	"voxroom/internal/ws"
 )
 
@@ -31,6 +32,9 @@ func main() {
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
 	})
+
+	// 🔥 WebRTC signalling endpoint
+	http.HandleFunc("/webrtc", webrtc.HandleHTTP)
 
 	// 🔹 Port (Render pakai PORT env)
 	port := os.Getenv("PORT")
