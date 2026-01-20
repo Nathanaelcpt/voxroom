@@ -13,14 +13,6 @@ type Client struct {
 	RoomID string
 }
 
-type Message struct {
-	Type   string `json:"type"`
-	UserID string `json:"user_id,omitempty"`
-	RoomID string `json:"room_id,omitempty"`
-	Text   string `json:"text,omitempty"`
-}
-
-
 func (c *Client) WritePump() {
 	defer c.Conn.Close()
 

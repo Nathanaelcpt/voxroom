@@ -1,9 +1,9 @@
-package webrtcx
+package webrtc
 
 import (
 	"encoding/json"
 
-	"github.com/pion/webrtc/v3"
+	pion "github.com/pion/webrtc/v3"
 )
 
 type Signal struct {
@@ -12,7 +12,7 @@ type Signal struct {
 }
 
 func HandleSignal(
-	pc *webrtc.PeerConnection,
+	pc *pion.PeerConnection,
 	signal Signal,
 	send func(any),
 ) error {
@@ -20,12 +20,23 @@ func HandleSignal(
 	switch signal.Type {
 
 	case "offer":
-		var offer webrtc.SessionDescription
-		json.Unmarshal(signal.Data, &offer)
+		var offer pion.SessionDescription
+		if err := json.Unmarshal(signal.Data, &offer); err != nil {
+			return err
+		}
 
-		pc.SetRemoteDescription(offer)
-		answer, _ := pc.CreateAnswer(nil)
-		pc.SetLocalDescription(answer)
+		if err := pc.SetRemoteDescription(offer); err != nil {
+			return err
+		}
+
+		answer, err := pc.CreateAnswer(nil)
+		if err != nil {
+			return err
+		}
+
+		if err := pc.SetLocalDescription(answer); err != nil {
+			return err
+		}
 
 		send(map[string]any{
 			"type": "answer",
@@ -33,14 +44,18 @@ func HandleSignal(
 		})
 
 	case "answer":
-		var answer webrtc.SessionDescription
-		json.Unmarshal(signal.Data, &answer)
-		pc.SetRemoteDescription(answer)
+		var answer pion.SessionDescription
+		if err := json.Unmarshal(signal.Data, &answer); err != nil {
+			return err
+		}
+		return pc.SetRemoteDescription(answer)
 
 	case "candidate":
-		var candidate webrtc.ICECandidateInit
-		json.Unmarshal(signal.Data, &candidate)
-		pc.AddICECandidate(candidate)
+		var c pion.ICECandidateInit
+		if err := json.Unmarshal(signal.Data, &c); err != nil {
+			return err
+		}
+		return pc.AddICECandidate(c)
 	}
 
 	return nil
