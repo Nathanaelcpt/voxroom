@@ -7,48 +7,55 @@ import (
 
 	"voxroom/internal/auth"
 	"voxroom/internal/db"
-	"voxroom/internal/webrtc"
 	"voxroom/internal/ws"
 )
 
 func main() {
+	// ======================
+	// ENV & DATABASE
+	// ======================
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL not set")
 	}
 
-	// 🔹 Connect DB
 	if err := db.Connect(databaseURL); err != nil {
 		log.Fatal(err)
 	}
 
-	// 🔹 Init WebSocket Hub
+	// ======================
+	// WEBSOCKET HUB (SIGNALLING)
+	// ======================
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// 🔹 HTTP routes
+	// ======================
+	// HTTP ROUTES
+	// ======================
 	http.HandleFunc("/register", auth.RegisterHandler)
 	http.HandleFunc("/login", auth.LoginHandler)
+
+	// 🔥 WebSocket signalling (WebRTC)
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
 	})
 
-	// 🔥 WebRTC signalling endpoint
-	http.HandleFunc("/webrtc", webrtc.HandleHTTP)
-
-	// 🔹 Port (Render pakai PORT env)
+	// ======================
+	// PORT (Render / Local)
+	// ======================
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	// 🔹 CORS Middleware (WAJIB UNTUK FRONTEND VERCEL)
+	// ======================
+	// CORS MIDDLEWARE
+	// ======================
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
-		// Handle preflight
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return

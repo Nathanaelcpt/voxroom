@@ -4,29 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"voxroom/internal/auth"
-
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
 func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	roomID := r.URL.Query().Get("room_id")
-	token := r.URL.Query().Get("token")
+	roomID := r.URL.Query().Get("room")
+	userID := r.URL.Query().Get("user")
 
-	if roomID == "" || token == "" {
-		http.Error(w, "missing room_id or token", http.StatusBadRequest)
-		return
-	}
-
-	userID, err := auth.VerifyToken(token)
-	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+	if roomID == "" || userID == "" {
+		http.Error(w, "missing room or user", 400)
 		return
 	}
 
@@ -62,7 +52,9 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			// 🔥 SEMUA MESSAGE = SIGNALLING
+			msg.RoomID = roomID
+			msg.From = userID
+
 			hub.Broadcast <- msg
 		}
 	}()

@@ -20,26 +20,20 @@ func (h *Hub) Run() {
 	for {
 		select {
 
-		case client := <-h.Register:
-			if h.Rooms[client.RoomID] == nil {
-				h.Rooms[client.RoomID] = make(map[*Client]bool)
+		case c := <-h.Register:
+			if h.Rooms[c.RoomID] == nil {
+				h.Rooms[c.RoomID] = make(map[*Client]bool)
 			}
-			h.Rooms[client.RoomID][client] = true
+			h.Rooms[c.RoomID][c] = true
 
-		case client := <-h.Unregister:
-			if h.Rooms[client.RoomID] != nil {
-				delete(h.Rooms[client.RoomID], client)
-
-				// optional: bersihkan room kosong
-				if len(h.Rooms[client.RoomID]) == 0 {
-					delete(h.Rooms, client.RoomID)
-				}
-			}
+		case c := <-h.Unregister:
+			delete(h.Rooms[c.RoomID], c)
 
 		case msg := <-h.Broadcast:
-			for c := range h.Rooms {
-				for client := range h.Rooms[c] {
-					client.Send <- msg
+			for c := range h.Rooms[msg.RoomID] {
+				// relay ke semua kecuali pengirim
+				if c.UserID != msg.From {
+					c.Send <- msg
 				}
 			}
 		}
