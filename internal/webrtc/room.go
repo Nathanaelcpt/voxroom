@@ -2,6 +2,7 @@ package webrtc
 
 import "sync"
 
+// Room merepresentasikan satu live audio room
 type Room struct {
 	ID        string
 	Speakers  map[string]*Peer
@@ -16,6 +17,8 @@ func NewRoom(id string) *Room {
 		Listeners: make(map[string]*Peer),
 	}
 }
+
+// ===== ROLE MANAGEMENT =====
 
 func (r *Room) AddSpeaker(userID string, p *Peer) {
 	r.mu.Lock()
