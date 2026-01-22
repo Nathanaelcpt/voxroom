@@ -47,7 +47,7 @@ export default function RoomPage() {
             className="bg-[#18181b] rounded-lg overflow-hidden hover:ring-2 hover:ring-purple-600 transition"
           >
             {/* Thumbnail */}
-            <div className="h-36 bg-gradient-to-br from-purple-700 to-purple-900 flex items-center justify-center">
+            <div className="h-36 bg-linear-to-br from-purple-700 to-purple-900 flex items-center justify-center">
               <span className="text-sm text-white/80">LIVE</span>
             </div>
 
