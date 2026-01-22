@@ -1,58 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-const WS = process.env.NEXT_PUBLIC_WS_URL!;
+import { useRouter } from "next/navigation";
 
 export default function RoomPage() {
-  const [messages, setMessages] = useState<string[]>([]);
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const router = useRouter();
 
-  useEffect(() => {
+  function joinRoom() {
     const token = localStorage.getItem("token");
-    if (!token) return;
+    if (!token) {
+      alert("Silakan login terlebih dahulu");
+      return;
+    }
 
-    const socket = new WebSocket(
-      `${WS}/ws?room_id=room1&token=${token}`
-    );
-
-    socket.onopen = () => {
-      console.log("WS CONNECTED");
-    };
-
-    socket.onmessage = (e) => {
-      setMessages((prev) => [...prev, e.data]);
-    };
-
-    socket.onclose = () => console.log("WS CLOSED");
-
-    setWs(socket);
-    return () => socket.close();
-  }, []);
-
-  function sendTranscript() {
-    ws?.send(
-      JSON.stringify({
-        type: "TRANSCRIPT",
-        text: "halo dari frontend production",
-      })
-    );
+    alert("Nanti masuk room live (belum aktif)");
   }
 
   return (
     <main className="p-6">
-      <h1 className="text-xl font-bold mb-4">Room</h1>
+      <h2 className="text-xl font-bold mb-4">Live Rooms</h2>
 
-      <button
-        onClick={sendTranscript}
-        className="bg-blue-600 text-white px-3 py-2 mb-4"
-      >
-        Send Transcript
-      </button>
-
-      <pre className="bg-gray-100 p-3">
-        {messages.join("\n")}
-      </pre>
+      {/* Dummy Room */}
+      <div className="border border-zinc-700 p-4 rounded mb-4">
+        <p className="font-semibold">🎙️ Podcast Malam Jumat</p>
+        <button
+          onClick={joinRoom}
+          className="mt-2 bg-blue-600 px-3 py-1 rounded"
+        >
+          Join Room
+        </button>
+      </div>
     </main>
   );
 }
