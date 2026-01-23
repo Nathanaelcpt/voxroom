@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"voxroom/internal/db"
+	"voxroom/backend/db"
 )
 
 func SaveTranscript(roomID, userID, text string) error {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"voxroom/internal/db"
+	"voxroom/backend/db"
 
 	"golang.org/x/crypto/bcrypt"
 )

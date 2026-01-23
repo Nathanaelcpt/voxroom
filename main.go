@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"os"
 
-	"voxroom/internal/auth"
-	"voxroom/internal/db"
-	"voxroom/internal/ws"
+	"voxroom/backend/auth"
+	"voxroom/backend/db"
+	"voxroom/backend/ws"
 )
 
 func main() {
