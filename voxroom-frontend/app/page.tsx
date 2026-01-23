@@ -1,3 +1,5 @@
+"use client"
+
 export default function HomePage() {
   return (
     <section className="flex flex-col gap-6 p-6 space-y-6">
