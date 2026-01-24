@@ -1,7 +1,6 @@
 import type { Metadata } from "next"
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
-import { AppSidebar } from "@/components/app-sidebar"
-import "./globals.css" // ← Tambahkan ini
+import "./globals.css"
+import Topbar from "@/components/topbar"
 
 export const metadata: Metadata = {
   title: "VoxRoom",
@@ -16,18 +15,13 @@ export default function RootLayout({
   return (
     <html lang="id">
       <body className="min-h-screen" suppressHydrationWarning>
-        <SidebarProvider>
-          <div className="flex min-h-screen w-full">
-            <AppSidebar />
+        {/* Top Taskbar */}
+        <Topbar />
 
-            <main className="flex-1 overflow-auto">
-              <div className="p-4">
-                <SidebarTrigger />
-                {children}
-              </div>
-            </main>
-          </div>
-        </SidebarProvider>
+        {/* Content */}
+        <main className="pt-14">
+          {children}
+        </main>
       </body>
     </html>
   )
