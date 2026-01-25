@@ -24,7 +24,6 @@ export function LoginDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
-  const supabase = getSupabase()
   const [step, setStep] = useState<"email" | "password">("email")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -32,6 +31,7 @@ export function LoginDialog({
   const [error, setError] = useState<string | null>(null)
 
   async function handleContinue() {
+    const supabase = getSupabase() // ✅ PINDAH KE SINI
     setError(null)
 
     if (step === "email") {
@@ -42,14 +42,12 @@ export function LoginDialog({
 
     setLoading(true)
 
-    // coba login
     const { error: signInError } =
       await supabase.auth.signInWithPassword({
         email,
         password,
       })
 
-    // auto register kalau belum ada
     if (signInError) {
       const { error: signUpError } =
         await supabase.auth.signUp({
@@ -64,20 +62,19 @@ export function LoginDialog({
       }
     }
 
-    // sync ke table users (FK aman)
     const { data } = await supabase.auth.getUser()
     const user = data.user
 
     if (user) {
       await supabase
-      .from("users")
-      .upsert({
-        id: user.id,
-        email: user.email,
-        display_name:
-          user.user_metadata?.full_name ?? user.email,
-        avatar_url: user.user_metadata?.avatar_url,
-      } as any)
+        .from("users")
+        .upsert({
+          id: user.id,
+          email: user.email,
+          display_name:
+            user.user_metadata?.full_name ?? user.email,
+          avatar_url: user.user_metadata?.avatar_url,
+        } as any)
     }
 
     setLoading(false)
@@ -86,18 +83,16 @@ export function LoginDialog({
   }
 
   async function loginWithGoogle() {
+    const supabase = getSupabase() // ✅ DI DALAM EVENT
     await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: {
-        redirectTo: window.location.origin,
-      },
+      options: { redirectTo: window.location.origin },
     })
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="border-none bg-transparent shadow-none">
-        {/* wajib untuk accessibility */}
         <DialogTitle className="sr-only">
           Login VoxRoom
         </DialogTitle>
@@ -127,9 +122,7 @@ export function LoginDialog({
             )}
 
             {error && (
-              <p className="text-xs text-red-500">
-                {error}
-              </p>
+              <p className="text-xs text-red-500">{error}</p>
             )}
 
             <Button
@@ -155,13 +148,6 @@ export function LoginDialog({
             >
               Login with Google
             </Button>
-
-            <p className="text-center text-xs text-muted-foreground">
-              Belum punya akun?{" "}
-              <span className="underline cursor-pointer">
-                Register
-              </span>
-            </p>
           </CardContent>
         </Card>
       </DialogContent>
