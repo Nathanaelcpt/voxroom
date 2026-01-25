@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import "./globals.css"
 import Topbar from "@/components/topbar"
+import { ThemeProvider } from "@/components/theme-provider"
 
 export const metadata: Metadata = {
   title: "VoxRoom",
@@ -13,15 +14,15 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="id">
-      <body className="min-h-screen" suppressHydrationWarning>
-        {/* Top Taskbar */}
-        <Topbar />
+    <html lang="id" suppressHydrationWarning>
+      <body className="min-h-screen">
+        <ThemeProvider>
+          <Topbar />
 
-        {/* Content */}
-        <main className="pt-14">
-          {children}
-        </main>
+          <main className="pt-14">
+            {children}
+          </main>
+        </ThemeProvider>
       </body>
     </html>
   )
