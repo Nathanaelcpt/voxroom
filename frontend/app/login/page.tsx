@@ -1,12 +1,13 @@
 "use client"
-
 export const dynamic = "force-dynamic"
 
-import { supabase } from "@/lib/supabase"
 import { Button } from "@/components/ui/button"
+import { getSupabase } from "@/lib/supabase"
 
 export default function LoginPage() {
   async function loginWithGoogle() {
+    const supabase = getSupabase()
+
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {

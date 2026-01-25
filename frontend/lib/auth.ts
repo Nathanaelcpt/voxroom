@@ -1,6 +1,8 @@
-import { supabase } from "./supabase"
+import { getSupabase } from "./supabase"
 
 export async function loginWithGoogle() {
+  const supabase = getSupabase()
+
   return supabase.auth.signInWithOAuth({
     provider: "google",
     options: {

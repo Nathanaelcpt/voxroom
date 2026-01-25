@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { supabase } from "@/lib/supabase"
+import { getSupabase } from "@/lib/supabase"
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,7 @@ export function LoginDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
+  const supabase = getSupabase()
   const [step, setStep] = useState<"email" | "password">("email")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -68,13 +69,15 @@ export function LoginDialog({
     const user = data.user
 
     if (user) {
-      await supabase.from("users").upsert({
+      await supabase
+      .from("users")
+      .upsert({
         id: user.id,
         email: user.email,
         display_name:
           user.user_metadata?.full_name ?? user.email,
         avatar_url: user.user_metadata?.avatar_url,
-      })
+      } as any)
     }
 
     setLoading(false)

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { LoginDialog } from "@/components/login-dialog"
-import { supabase } from "@/lib/supabase"
+import { getSupabase } from "@/lib/supabase"
 
 const rooms = ["andi", "budi", "charlie"]
 
@@ -13,22 +13,25 @@ export default function HomePage() {
   // 🔥 INI KUNCI: sync user setelah login Google redirect
   useEffect(() => {
   async function syncUser() {
+    const supabase = getSupabase()
+
     const { data } = await supabase.auth.getUser()
     const user = data.user
     if (!user) return
 
-    const { error } = await supabase.from("users").upsert({
+    const { error } = await supabase
+    .from("users")
+    .upsert({
       id: user.id,
       email: user.email,
       display_name:
         user.user_metadata?.full_name ?? user.email,
       avatar_url: user.user_metadata?.avatar_url,
       last_active_at: new Date().toISOString(),
-    })
+    } as any)
 
-    if (error) {
-      console.error("UPSERT USERS ERROR:", error)
-    }
+
+    if (error) console.error(error)
   }
 
   syncUser()
