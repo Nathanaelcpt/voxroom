@@ -142,7 +142,7 @@ export function LoginDialog({
             </div>
 
             <Button
-              variant="outline"
+              variant="outline"   
               className="w-full"
               onClick={loginWithGoogle}
             >
