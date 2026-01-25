@@ -12,44 +12,38 @@ import (
 
 func main() {
 	// ======================
-	// ENV & DATABASE
+	// DATABASE
 	// ======================
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		log.Fatal("DATABASE_URL not set")
-	}
-
-	if err := db.Connect(databaseURL); err != nil {
+	if err := db.Connect(os.Getenv("DATABASE_URL")); err != nil {
 		log.Fatal(err)
 	}
 
 	// ======================
-	// WEBSOCKET HUB (SIGNALLING)
+	// WEBSOCKET HUB
 	// ======================
 	hub := ws.NewHub()
 	go hub.Run()
 
 	// ======================
-	// HTTP ROUTES
+	// ROUTES
 	// ======================
-	http.HandleFunc("/register", auth.RegisterHandler)
-	http.HandleFunc("/login", auth.LoginHandler)
+	mux := http.NewServeMux()
 
-	// 🔥 WebSocket signalling (WebRTC)
-	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	// Protected example
+	mux.Handle("/rooms", auth.AuthMiddleware(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := r.Context().Value(auth.UserIDKey).(string)
+			w.Write([]byte("hello user " + userID))
+		}),
+	))
+
+	// WebSocket (optional auth nanti)
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
 	})
 
 	// ======================
-	// PORT (Render / Local)
-	// ======================
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-
-	// ======================
-	// CORS MIDDLEWARE
+	// CORS
 	// ======================
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -61,9 +55,14 @@ func main() {
 			return
 		}
 
-		http.DefaultServeMux.ServeHTTP(w, r)
+		mux.ServeHTTP(w, r)
 	})
 
-	log.Println("🚀 Server running on :" + port)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Println("🚀 Backend running on :" + port)
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
