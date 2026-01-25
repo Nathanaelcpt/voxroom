@@ -13,7 +13,7 @@ export default function HomePage() {
 
   return (
     <>
-      <section className="flex flex-col gap-6 p-6">
+      <section className="flex flex-col gap-6 p-6 bg-background text-foreground">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Live Rooms
@@ -27,7 +27,7 @@ export default function HomePage() {
           {rooms.map((name) => (
             <div
               key={name}
-              className="rounded-xl border bg-card p-4 transition hover:shadow-md"
+              className="rounded-xl border bg-card p-4 transition hover:shadow-md dark:hover:shadow-lg"
             >
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted font-semibold">

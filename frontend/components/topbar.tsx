@@ -27,7 +27,7 @@ export default function Topbar() {
 
   return (
     <>
-      <header className="fixed top-0 z-50 w-full border-b bg-background">
+      <header className="fixed top-0 z-50 w-full border-b bg-background text-foreground">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
           {/* Left */}
           <span className="text-lg font-semibold">
@@ -37,7 +37,7 @@ export default function Topbar() {
           {/* Middle */}
           <input
             placeholder="Search"
-            className="h-9 w-72 rounded-md border bg-background px-3 text-sm"
+            className="h-9 w-72 rounded-md border bg-background text-foreground px-3 text-sm"
           />
 
           {/* Right */}
