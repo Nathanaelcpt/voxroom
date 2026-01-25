@@ -148,6 +148,15 @@ export function LoginDialog({
             >
               Login with Google
             </Button>
+            <p className="text-center text-xs text-muted-foreground">
+              Belum punya akun?{" "}
+              <a
+                href="/register"
+                className="underline font-medium hover:text-primary"
+              >
+                Daftar sekarang
+              </a>
+            </p>
           </CardContent>
         </Card>
       </DialogContent>
