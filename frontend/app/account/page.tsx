@@ -13,13 +13,14 @@ type UserProfile = {
 
 export default function AccountPage() {
   const { user, loading } = useUser()
-  const supabase = getSupabase()
-
   const [username, setUsername] = useState("")
   const [saving, setSaving] = useState(false)
 
+  // 🔑 SUPABASE HANYA DIPANGGIL DI EFFECT
   useEffect(() => {
     if (!user) return
+
+    const supabase = getSupabase()
 
     supabase
       .from("users")
@@ -29,15 +30,16 @@ export default function AccountPage() {
       .then(({ data }) => {
         if (data) setUsername(data.username)
       })
-  }, [user, supabase])
+  }, [user])
 
   if (loading) return null
   if (!user) return <p className="p-6">Harus login</p>
 
   async function updateUsername() {
     if (!user) return
-
     setSaving(true)
+
+    const supabase = getSupabase()
     await (supabase as any)
       .from("users")
       .update({ username })
@@ -47,19 +49,21 @@ export default function AccountPage() {
   }
 
   async function logout() {
+    const supabase = getSupabase()
     await supabase.auth.signOut()
     window.location.href = "/"
   }
 
   async function deleteAccount() {
     if (!user) return
+    if (!confirm("Yakin hapus akun? Ini permanen.")) return
 
-    const ok = confirm("Yakin hapus akun? Ini permanen.")
-    if (!ok) return
+    const supabase = getSupabase()
+    await (supabase as any)
+      .from("users")
+      .delete()
+      .eq("id", user.id)
 
-    await supabase.from("users").delete().eq("id", user.id)
-
-    alert("Akun dihapus (auth delete sebaiknya via backend)")
     await logout()
   }
 
@@ -67,7 +71,6 @@ export default function AccountPage() {
     <div className="mx-auto max-w-xl space-y-6 p-6">
       <h1 className="text-2xl font-semibold">Kelola Akun</h1>
 
-      {/* Username */}
       <div className="space-y-2">
         <label className="text-sm font-medium">Username</label>
         <Input
@@ -79,7 +82,6 @@ export default function AccountPage() {
         </Button>
       </div>
 
-      {/* Password */}
       <div className="space-y-2">
         <label className="text-sm font-medium">
           Ganti Password
@@ -87,7 +89,7 @@ export default function AccountPage() {
         <Button
           variant="outline"
           onClick={() =>
-            supabase.auth.resetPasswordForEmail(
+            getSupabase().auth.resetPasswordForEmail(
               user.email!
             )
           }
@@ -96,16 +98,12 @@ export default function AccountPage() {
         </Button>
       </div>
 
-      {/* Actions */}
       <div className="space-y-2 pt-4 border-t">
         <Button variant="secondary" onClick={logout}>
           Logout
         </Button>
 
-        <Button
-          variant="destructive"
-          onClick={deleteAccount}
-        >
+        <Button variant="destructive" onClick={deleteAccount}>
           Hapus Akun
         </Button>
       </div>
