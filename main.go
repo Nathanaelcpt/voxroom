@@ -14,10 +14,15 @@ func main() {
 	// ======================
 	// DATABASE
 	// ======================
-	if err := db.Connect(os.Getenv("DATABASE_URL")); err != nil {
-		log.Fatal(err)
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("❌ DATABASE_URL not set")
 	}
 
+	log.Println("🔌 Connecting to database...")
+	if err := db.Connect(databaseURL); err != nil {
+		log.Fatal("❌ DB CONNECT ERROR:", err)
+	}
 	// ======================
 	// WEBSOCKET HUB
 	// ======================
