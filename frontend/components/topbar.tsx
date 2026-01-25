@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { useRouter } from "next/navigation"
 import { useUser } from "@/hooks/use-user"
 import { AuthDialog } from "@/components/auth-dialog"
 import {
@@ -12,15 +13,27 @@ import {
 export default function Topbar() {
   const { user, loading } = useUser()
   const [open, setOpen] = useState(false)
+  const router = useRouter()
 
   if (loading) return null
+
+  function handleAvatarClick() {
+    if (!user) {
+      setOpen(true)
+    } else {
+      router.push("/account")
+    }
+  }
 
   return (
     <>
       <header className="fixed top-0 z-50 w-full border-b bg-background">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
           {/* Left */}
-          <span className="text-lg font-semibold">VoxRoom</span>
+          <span className="text-lg font-semibold cursor-pointer"
+                onClick={() => router.push("/")}>
+            VoxRoom
+          </span>
 
           {/* Middle */}
           <input
@@ -31,7 +44,7 @@ export default function Topbar() {
           {/* Right */}
           <Avatar
             className="h-8 w-8 cursor-pointer"
-            onClick={() => !user && setOpen(true)}
+            onClick={handleAvatarClick}
           >
             <AvatarImage
               src={
@@ -46,6 +59,7 @@ export default function Topbar() {
         </div>
       </header>
 
+      {/* Auth Modal */}
       <AuthDialog open={open} onOpenChange={setOpen} />
     </>
   )
