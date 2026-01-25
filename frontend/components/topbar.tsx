@@ -27,7 +27,7 @@ export default function Topbar() {
           {isLoggedIn ? (
             <AvatarImage src="/profile.jpg" />
           ) : (
-            <AvatarImage src="/guest-avatar.png" />
+            <AvatarImage src="/guest.png" />
           )}
 
           <AvatarFallback>G</AvatarFallback>
