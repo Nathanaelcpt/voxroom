@@ -10,3 +10,15 @@ export async function loginWithGoogle() {
     },
   })
 }
+
+export async function getAccessToken() {
+  const supabase = getSupabase()
+  const { data, error } = await supabase.auth.getSession()
+
+  if (error) {
+    console.error("getSession error:", error)
+    return null
+  }
+
+  return data.session?.access_token ?? null
+}

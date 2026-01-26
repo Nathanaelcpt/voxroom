@@ -4,12 +4,45 @@ import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { AuthDialog } from "@/components/auth-dialog"
 import { useUser } from "@/hooks/use-user"
+import { getAccessToken } from "@/lib/auth"
 
 const rooms = ["andi", "budi", "charlie"]
 
 export default function HomePage() {
-  const { user } = useUser()
+  const { user, loading } = useUser()
   const [open, setOpen] = useState(false)
+
+  async function joinRoom(roomName: string) {
+    if (!user) {
+      setOpen(true)
+      return
+    }
+
+    const token = await getAccessToken()
+
+    // 🔍 DEBUG (hapus nanti)
+    console.log("=== JOIN ROOM DEBUG ===")
+    console.log("Room:", roomName)
+    console.log("User ID:", user.id)
+    console.log("JWT OK:", !!token)
+    console.log("JWT Preview:", token?.slice(0, 20), "...")
+
+    if (!token) {
+      alert("Session invalid, silakan login ulang")
+      return
+    }
+
+    // NEXT STEP:
+    // connect WebSocket pakai token
+  }
+
+  if (loading) {
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        Loading...
+      </div>
+    )
+  }
 
   return (
     <>
@@ -27,7 +60,7 @@ export default function HomePage() {
           {rooms.map((name) => (
             <div
               key={name}
-              className="rounded-xl border bg-card p-4 transition hover:shadow-md dark:hover:shadow-lg"
+              className="rounded-xl border bg-card p-4 transition hover:shadow-md"
             >
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted font-semibold">
@@ -43,10 +76,7 @@ export default function HomePage() {
 
               <Button
                 className="mt-4 w-full"
-                onClick={() => {
-                  if (!user) setOpen(true)
-                  else alert("Masuk room 🚀")
-                }}
+                onClick={() => joinRoom(name)}
               >
                 Join Room
               </Button>
