@@ -16,7 +16,6 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar"
-
 import { AvatarCropDialog } from "@/components/avatar-crop-dialog"
 
 type UserProfile = {
@@ -27,7 +26,7 @@ type UserProfile = {
 
 export default function AccountPage() {
   const { user, loading } = useUser()
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [username, setUsername] = useState("")
   const [bio, setBio] = useState("")
@@ -43,7 +42,7 @@ export default function AccountPage() {
   if (loading) return <div className="p-6">Loading...</div>
   if (!user) return <div className="p-6">Harus login</div>
 
-  // 🔑 INI KUNCI UTAMA (TYPE AMAN)
+  // 🔐 TYPE AMAN SETELAH GUARD
   const currentUser = user
 
   /* =======================
@@ -70,26 +69,23 @@ export default function AccountPage() {
     setSaving(true)
 
     await (getSupabase() as any)
-  .from("users")
-  .update({
-    username,
-    bio,
-  })
-  .eq("id", currentUser.id)
-
+      .from("users")
+      .update({
+        username,
+        bio,
+      })
+      .eq("id", currentUser.id)
 
     setSaving(false)
   }
 
   /* =======================
-     FINAL AVATAR UPLOAD
+     SAVE CROPPED AVATAR
   ======================= */
   async function saveCroppedAvatar(blob: Blob) {
     setUploading(true)
 
-    let file = new File([blob], "avatar.jpg", {
-      type: "image/jpeg",
-    })
+    let file = new File([blob], "avatar.jpg", { type: "image/jpeg" })
 
     if (file.size > 5 * 1024 * 1024) {
       file = await compressImage(file)
@@ -113,25 +109,23 @@ export default function AccountPage() {
       data: { avatar_url: data.publicUrl },
     })
 
-    await (getSupabase() as any)
-  .from("users")
-  .update({
-    avatar_url: data.publicUrl,
-  })
-  .eq("id", currentUser.id)
-
+    await (supabase as any)
+      .from("users")
+      .update({ avatar_url: data.publicUrl })
+      .eq("id", currentUser.id)
 
     setAvatarUrl(data.publicUrl)
     setUploading(false)
     setCropFile(null)
 
+    // reset input biar bisa upload file yg sama lagi
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
   }
 
   /* =======================
-     LOGOUT & DELETE
+     AUTH ACTIONS
   ======================= */
   async function logout() {
     await getSupabase().auth.signOut()
@@ -141,7 +135,7 @@ export default function AccountPage() {
   async function deleteAccount() {
     if (!confirm("Yakin hapus akun? Ini permanen.")) return
 
-    await getSupabase()
+    await (getSupabase() as any)
       .from("users")
       .delete()
       .eq("id", currentUser.id)
@@ -159,7 +153,8 @@ export default function AccountPage() {
           href="/"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground"
         >
-          <ArrowLeft className="h-4 w-4" /> Kembali
+          <ArrowLeft className="h-4 w-4" />
+          Kembali
         </Link>
 
         <h1 className="text-2xl font-semibold">Kelola Akun</h1>
@@ -241,6 +236,7 @@ export default function AccountPage() {
         </div>
       </div>
 
+      {/* Crop Dialog */}
       {cropFile && (
         <AvatarCropDialog
           file={cropFile}

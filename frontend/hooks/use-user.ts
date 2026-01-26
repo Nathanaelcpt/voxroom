@@ -11,20 +11,22 @@ export function useUser() {
   useEffect(() => {
     const supabase = getSupabase()
 
-    // session awal
+    // initial session
     supabase.auth.getUser().then(({ data }) => {
       setUser(data.user ?? null)
       setLoading(false)
     })
 
-    // realtime auth listener
+    // auth listener
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null)
     })
 
-    return () => subscription.unsubscribe()
+    return () => {
+      subscription.unsubscribe()
+    }
   }, [])
 
   return { user, loading }
