@@ -1,9 +1,18 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { getAccessToken } from "@/lib/auth"
 
 type AudioDevice = {
   deviceId: string
@@ -11,14 +20,17 @@ type AudioDevice = {
 }
 
 export default function GoLiveSetupPage() {
+  const router = useRouter()
+
+  const [title, setTitle] = useState("")
   const [devices, setDevices] = useState<AudioDevice[]>([])
-  const [selectedMic, setSelectedMic] = useState<string>("")
+  const [selectedMic, setSelectedMic] = useState("")
   const [permissionError, setPermissionError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     async function loadDevices() {
       try {
-        // minta permission dulu biar label kebaca
         await navigator.mediaDevices.getUserMedia({ audio: true })
 
         const allDevices = await navigator.mediaDevices.enumerateDevices()
@@ -42,14 +54,61 @@ export default function GoLiveSetupPage() {
     loadDevices()
   }, [])
 
-  function startLive() {
-    console.log("GO LIVE")
-    console.log("Selected mic:", selectedMic)
+  async function startLive() {
+    if (!title.trim()) {
+      alert("Judul room wajib diisi")
+      return
+    }
 
-    // NEXT STEP:
-    // - create room
-    // - connect WS
-    // - publish audio
+    if (!selectedMic) {
+      alert("Microphone belum dipilih")
+      return
+    }
+
+    setLoading(true)
+
+    const token = await getAccessToken()
+    if (!token) {
+      alert("Harus login")
+      setLoading(false)
+      return
+    }
+
+    try {
+      const res = await fetch(
+        process.env.NEXT_PUBLIC_API_URL + "/rooms",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            title,
+          }),
+        }
+      )
+
+      if (!res.ok) {
+        throw new Error("Gagal membuat room")
+      }
+
+      const data = await res.json()
+
+      console.log("ROOM CREATED:", data.room_id)
+      console.log("Selected mic:", selectedMic)
+
+      // NEXT STEP:
+      // simpan selectedMic (state / context)
+      // connect WS + WebRTC
+
+      router.push(`/room/${data.room_id}`)
+    } catch (err) {
+      console.error(err)
+      alert("Terjadi kesalahan saat Go Live")
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -64,6 +123,19 @@ export default function GoLiveSetupPage() {
             <p className="text-sm text-red-500">{permissionError}</p>
           )}
 
+          {/* Judul Room */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">
+              Judul Room
+            </label>
+            <Input
+              placeholder="Contoh: Podcast Malam Jumat"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+
+          {/* Microphone */}
           <div className="space-y-2">
             <label className="text-sm font-medium">
               Microphone
@@ -93,10 +165,10 @@ export default function GoLiveSetupPage() {
 
           <Button
             className="w-full"
-            disabled={!selectedMic}
+            disabled={loading}
             onClick={startLive}
           >
-            Go Live
+            {loading ? "Going Live..." : "Go Live"}
           </Button>
         </CardContent>
       </Card>
