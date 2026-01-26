@@ -25,6 +25,9 @@ type UserProfile = {
 }
 
 export default function AccountPage() {
+  /* =======================
+     HOOKS (WAJIB DI ATAS)
+  ======================= */
   const { user, loading } = useUser()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -37,22 +40,15 @@ export default function AccountPage() {
   const [cropFile, setCropFile] = useState<File | null>(null)
 
   /* =======================
-     GUARD
-  ======================= */
-  if (loading) return <div className="p-6">Loading...</div>
-  if (!user) return <div className="p-6">Harus login</div>
-
-  // 🔐 TYPE AMAN SETELAH GUARD
-  const currentUser = user
-
-  /* =======================
-     LOAD PROFILE
+     LOAD PROFILE (AMAN)
   ======================= */
   useEffect(() => {
+    if (!user) return
+
     getSupabase()
       .from("users")
       .select("username, bio, avatar_url")
-      .eq("id", currentUser.id)
+      .eq("id", user.id)
       .single<UserProfile>()
       .then(({ data }) => {
         if (!data) return
@@ -60,7 +56,20 @@ export default function AccountPage() {
         setBio(data.bio ?? "")
         setAvatarUrl(data.avatar_url)
       })
-  }, [currentUser.id])
+  }, [user?.id])
+
+  /* =======================
+     GUARD (SETELAH HOOKS)
+  ======================= */
+  if (loading) {
+    return <div className="p-6">Loading...</div>
+  }
+
+  if (!user) {
+    return <div className="p-6">Harus login</div>
+  }
+
+  const currentUser = user
 
   /* =======================
      UPDATE PROFILE
@@ -70,10 +79,7 @@ export default function AccountPage() {
 
     await (getSupabase() as any)
       .from("users")
-      .update({
-        username,
-        bio,
-      })
+      .update({ username, bio })
       .eq("id", currentUser.id)
 
     setSaving(false)
@@ -85,7 +91,9 @@ export default function AccountPage() {
   async function saveCroppedAvatar(blob: Blob) {
     setUploading(true)
 
-    let file = new File([blob], "avatar.jpg", { type: "image/jpeg" })
+    let file = new File([blob], "avatar.jpg", {
+      type: "image/jpeg",
+    })
 
     if (file.size > 5 * 1024 * 1024) {
       file = await compressImage(file)
@@ -115,10 +123,9 @@ export default function AccountPage() {
       .eq("id", currentUser.id)
 
     setAvatarUrl(data.publicUrl)
-    setUploading(false)
     setCropFile(null)
+    setUploading(false)
 
-    // reset input biar bisa upload file yg sama lagi
     if (fileInputRef.current) {
       fileInputRef.current.value = ""
     }
@@ -211,7 +218,6 @@ export default function AccountPage() {
           Simpan Profil
         </Button>
 
-        {/* Password */}
         <div className="border-t pt-4">
           <Button
             variant="outline"
@@ -225,7 +231,6 @@ export default function AccountPage() {
           </Button>
         </div>
 
-        {/* Actions */}
         <div className="flex gap-2 border-t pt-4">
           <Button variant="secondary" onClick={logout}>
             Logout
@@ -236,7 +241,6 @@ export default function AccountPage() {
         </div>
       </div>
 
-      {/* Crop Dialog */}
       {cropFile && (
         <AvatarCropDialog
           file={cropFile}
