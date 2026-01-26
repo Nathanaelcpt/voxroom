@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/MicahParks/keyfunc"
 	"github.com/golang-jwt/jwt/v4"
@@ -13,25 +15,39 @@ type contextKey string
 
 const UserIDKey contextKey = "user_id"
 
-// GANTI dengan project ref Supabase kamu
 const jwksURL = "https://ecvtonwwjwjixwfhjtdh.supabase.co/auth/v1/keys"
 
-var jwks *keyfunc.JWKS
+var (
+	jwks     *keyfunc.JWKS
+	jwksOnce sync.Once
+	jwksErr  error
+)
 
-func init() {
-	var err error
-	jwks, err = keyfunc.Get(jwksURL, keyfunc.Options{})
-	if err != nil {
-		panic("failed to load JWKS: " + err.Error())
-	}
+func loadJWKS() error {
+	jwksOnce.Do(func() {
+		jwks, jwksErr = keyfunc.Get(jwksURL, keyfunc.Options{
+			RefreshInterval: time.Hour,
+			RefreshErrorHandler: func(err error) {
+				// jangan panic, cukup log
+				println("JWKS refresh error:", err.Error())
+			},
+		})
+	})
+	return jwksErr
 }
 
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		// 🔥 allow preflight
+		// ✅ allow CORS preflight
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// ✅ lazy load JWKS (aman di Render)
+		if err := loadJWKS(); err != nil {
+			http.Error(w, "auth service unavailable", http.StatusServiceUnavailable)
 			return
 		}
 
