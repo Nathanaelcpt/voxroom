@@ -47,20 +47,28 @@ export default function AccountPage() {
      LOAD PROFILE
   ======================= */
   useEffect(() => {
-    const supabase = getSupabase()
+  if (!user) return
 
-    supabase
-      .from("users")
-      .select("username, bio, avatar_url")
-      .eq("id", userId)
-      .single<UserProfile>()
-      .then(({ data }) => {
-        if (!data) return
-        setUsername(data.username)
-        setBio(data.bio ?? "")
-        setAvatarUrl(data.avatar_url)
-      })
-  }, [userId])
+  const supabase = getSupabase()
+
+  ;(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("users")
+        .select("username, bio, avatar_url")
+        .eq("id", user.id)
+        .single<UserProfile>()
+
+      if (error || !data) return
+
+      setUsername(data.username)
+      setBio(data.bio ?? "")
+      setAvatarUrl(data.avatar_url)
+    } catch (err) {
+      console.error("Load profile error:", err)
+    }
+  })()
+}, [user.id])
 
   /* =======================
      UPDATE PROFILE
@@ -189,7 +197,7 @@ export default function AccountPage() {
         {/* Avatar */}
         <div className="flex items-center gap-4">
           <Avatar className="h-16 w-16">
-            <AvatarImage src={avatarUrl ?? undefined} />
+            {avatarUrl && <AvatarImage src={avatarUrl} />}
             <AvatarFallback>
               {userEmail[0]?.toUpperCase()}
             </AvatarFallback>
