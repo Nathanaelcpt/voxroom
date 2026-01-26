@@ -18,6 +18,13 @@ var jwtSecret = []byte(os.Getenv("SUPABASE_JWT_SECRET"))
 
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// 🔥 WAJIB: allow CORS preflight
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
 			http.Error(w, "missing authorization header", http.StatusUnauthorized)
