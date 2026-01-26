@@ -30,10 +30,7 @@ export default function Topbar() {
       <header className="fixed top-0 z-50 w-full border-b bg-background text-foreground">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
           {/* Left */}
-          <Link
-            href="/"
-            className="text-lg font-semibold hover:opacity-80"
-          >
+          <Link href="/" className="text-lg font-semibold">
             VoxRoom
           </Link>
 

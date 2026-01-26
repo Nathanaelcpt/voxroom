@@ -1,28 +1,37 @@
 export async function compressImage(
-  file: File,
+  file: Blob,
   maxSizeMB = 5
 ): Promise<File> {
-  if (!file.type.startsWith("image/")) {
-    throw new Error("File harus gambar")
-  }
-
   const bitmap = await createImageBitmap(file)
   const canvas = document.createElement("canvas")
   const ctx = canvas.getContext("2d")!
 
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
-  ctx.drawImage(bitmap, 0, 0)
+  const size = Math.min(bitmap.width, bitmap.height)
+  canvas.width = size
+  canvas.height = size
 
-  let quality = 0.8
+  // crop tengah
+  ctx.drawImage(
+    bitmap,
+    (bitmap.width - size) / 2,
+    (bitmap.height - size) / 2,
+    size,
+    size,
+    0,
+    0,
+    size,
+    size
+  )
+
+  let quality = 0.9
   let blob: Blob | null = null
 
   do {
-    blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", quality)
+    blob = await new Promise<Blob | null>((res) =>
+      canvas.toBlob(res, "image/jpeg", quality)
     )
     quality -= 0.1
-  } while (blob && blob.size > maxSizeMB * 1024 * 1024 && quality > 0.3)
+  } while (blob && blob.size > maxSizeMB * 1024 * 1024)
 
   if (!blob) throw new Error("Gagal compress")
 
