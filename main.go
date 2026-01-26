@@ -4,25 +4,38 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"voxroom/backend/auth"
 	"voxroom/backend/db"
+	"voxroom/backend/room"
 	"voxroom/backend/ws"
 )
 
 func main() {
 	// ======================
-	// DATABASE
+	// DATABASE (retry friendly)
 	// ======================
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("❌ DATABASE_URL not set")
 	}
 
-	log.Println("🔌 Connecting to database...")
-	if err := db.Connect(databaseURL); err != nil {
+	var err error
+	for i := 1; i <= 3; i++ {
+		log.Println("🔌 Connecting to database (attempt", i, ")...")
+		err = db.Connect(databaseURL)
+		if err == nil {
+			break
+		}
+		log.Println("⏳ DB not ready, retry in 5s...")
+		time.Sleep(5 * time.Second)
+	}
+
+	if err != nil {
 		log.Fatal("❌ DB CONNECT ERROR:", err)
 	}
+
 	// ======================
 	// WEBSOCKET HUB
 	// ======================
@@ -34,15 +47,13 @@ func main() {
 	// ======================
 	mux := http.NewServeMux()
 
-	// Protected example
-	mux.Handle("/rooms", auth.AuthMiddleware(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID := r.Context().Value(auth.UserIDKey).(string)
-			w.Write([]byte("hello user " + userID))
-		}),
-	))
+	// CREATE ROOM (protected)
+	mux.Handle(
+		"/rooms",
+		auth.AuthMiddleware(http.HandlerFunc(room.CreateRoom)),
+	)
 
-	// WebSocket (optional auth nanti)
+	// WebSocket
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
 	})
