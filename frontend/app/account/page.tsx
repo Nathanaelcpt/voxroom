@@ -1,7 +1,7 @@
 "use client"
 export const dynamic = "force-dynamic"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ArrowLeft, Upload } from "lucide-react"
 
@@ -17,6 +17,8 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar"
 
+import { AvatarCropDialog } from "@/components/avatar-crop-dialog"
+
 type UserProfile = {
   username: string
   bio: string | null
@@ -25,25 +27,33 @@ type UserProfile = {
 
 export default function AccountPage() {
   const { user, loading } = useUser()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
 
   const [username, setUsername] = useState("")
   const [bio, setBio] = useState("")
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [cropFile, setCropFile] = useState<File | null>(null)
+
+  /* =======================
+     GUARD
+  ======================= */
+  if (loading) return <div className="p-6">Loading...</div>
+  if (!user) return <div className="p-6">Harus login</div>
+
+  // 🔑 INI KUNCI UTAMA (TYPE AMAN)
+  const currentUser = user
 
   /* =======================
      LOAD PROFILE
   ======================= */
   useEffect(() => {
-    if (!user) return
-
-    const supabase = getSupabase()
-
-    supabase
+    getSupabase()
       .from("users")
       .select("username, bio, avatar_url")
-      .eq("id", user.id)
+      .eq("id", currentUser.id)
       .single<UserProfile>()
       .then(({ data }) => {
         if (!data) return
@@ -51,54 +61,49 @@ export default function AccountPage() {
         setBio(data.bio ?? "")
         setAvatarUrl(data.avatar_url)
       })
-  }, [user?.id])
+  }, [currentUser.id])
 
   /* =======================
-     ACTIONS
+     UPDATE PROFILE
   ======================= */
   async function updateProfile() {
-    if (!user) return
     setSaving(true)
 
     await (getSupabase() as any)
-      .from("users")
-      .update({ username, bio })
-      .eq("id", user.id)
+  .from("users")
+  .update({
+    username,
+    bio,
+  })
+  .eq("id", currentUser.id)
+
 
     setSaving(false)
   }
 
-  async function uploadAvatar(file: File) {
-    if (!user) return
-
-    if (!file.type.startsWith("image/")) {
-      alert("File harus gambar")
-      return
-    }
-
-    let finalFile = file
-
-    if (file.size > 5 * 1024 * 1024) {
-      finalFile = await compressImage(file)
-    }
-
+  /* =======================
+     FINAL AVATAR UPLOAD
+  ======================= */
+  async function saveCroppedAvatar(blob: Blob) {
     setUploading(true)
 
-    const supabase = getSupabase()
-    const path = `${user.id}.jpg`
+    let file = new File([blob], "avatar.jpg", {
+      type: "image/jpeg",
+    })
 
-    const { error } = await supabase.storage
+    if (file.size > 5 * 1024 * 1024) {
+      file = await compressImage(file)
+    }
+
+    const supabase = getSupabase()
+    const path = `${currentUser.id}.jpg`
+
+    await supabase.storage
       .from("avatars")
-      .upload(path, finalFile, {
+      .upload(path, file, {
         upsert: true,
         contentType: "image/jpeg",
       })
-
-    if (error) {
-      alert("Upload gagal")
-      setUploading(false)
-      return
-    }
 
     const { data } = supabase.storage
       .from("avatars")
@@ -108,35 +113,52 @@ export default function AccountPage() {
       data: { avatar_url: data.publicUrl },
     })
 
-    await (supabase as any)
-      .from("users")
-      .update({ avatar_url: data.publicUrl })
-      .eq("id", user.id)
+    await (getSupabase() as any)
+  .from("users")
+  .update({
+    avatar_url: data.publicUrl,
+  })
+  .eq("id", currentUser.id)
+
 
     setAvatarUrl(data.publicUrl)
     setUploading(false)
+    setCropFile(null)
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
+    }
   }
 
+  /* =======================
+     LOGOUT & DELETE
+  ======================= */
   async function logout() {
     await getSupabase().auth.signOut()
     window.location.href = "/"
   }
 
+  async function deleteAccount() {
+    if (!confirm("Yakin hapus akun? Ini permanen.")) return
+
+    await getSupabase()
+      .from("users")
+      .delete()
+      .eq("id", currentUser.id)
+
+    await logout()
+  }
+
   /* =======================
-     RENDER
+     UI
   ======================= */
-  if (loading) {
-    return <div className="p-6">Loading...</div>
-  }
-
-  if (!user) {
-    return <div className="p-6">Harus login</div>
-  }
-
   return (
     <div className="mx-auto max-w-xl p-6">
       <div className="space-y-6 rounded-xl border bg-card p-6">
-        <Link href="/" className="flex items-center gap-1 text-sm text-muted-foreground">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground"
+        >
           <ArrowLeft className="h-4 w-4" /> Kembali
         </Link>
 
@@ -147,33 +169,43 @@ export default function AccountPage() {
           <Avatar className="h-16 w-16">
             <AvatarImage src={avatarUrl ?? undefined} />
             <AvatarFallback>
-              {user.email?.[0]?.toUpperCase() ?? "U"}
+              {currentUser.email?.[0]?.toUpperCase()}
             </AvatarFallback>
           </Avatar>
 
-          <label className={`cursor-pointer rounded-md border px-3 py-2 text-sm inline-flex items-center gap-2 ${uploading && "opacity-50 pointer-events-none"}`}>
+          <label
+            className={`inline-flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm
+            ${uploading ? "opacity-50 pointer-events-none" : "hover:bg-muted"}`}
+          >
             <Upload className="h-4 w-4" />
             {uploading ? "Uploading..." : "Ganti Foto"}
             <input
+              ref={fileInputRef}
               type="file"
               accept="image/*"
               hidden
-              onChange={(e) =>
-                e.target.files && uploadAvatar(e.target.files[0])
-              }
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) setCropFile(file)
+              }}
             />
           </label>
         </div>
 
+        {/* Username */}
         <div className="space-y-2">
           <label className="text-sm font-medium">Username</label>
-          <Input value={username} onChange={(e) => setUsername(e.target.value)} />
+          <Input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+          />
         </div>
 
+        {/* Bio */}
         <div className="space-y-2">
           <label className="text-sm font-medium">Bio</label>
           <textarea
-            className="w-full rounded-md border p-2 text-sm"
+            className="w-full rounded-md border bg-background p-2 text-sm"
             rows={3}
             value={bio}
             onChange={(e) => setBio(e.target.value)}
@@ -184,10 +216,38 @@ export default function AccountPage() {
           Simpan Profil
         </Button>
 
-        <div className="border-t pt-4 flex gap-2">
-          <Button variant="secondary" onClick={logout}>Logout</Button>
+        {/* Password */}
+        <div className="border-t pt-4">
+          <Button
+            variant="outline"
+            onClick={() =>
+              getSupabase().auth.resetPasswordForEmail(
+                currentUser.email!
+              )
+            }
+          >
+            Kirim Email Reset Password
+          </Button>
+        </div>
+
+        {/* Actions */}
+        <div className="flex gap-2 border-t pt-4">
+          <Button variant="secondary" onClick={logout}>
+            Logout
+          </Button>
+          <Button variant="destructive" onClick={deleteAccount}>
+            Hapus Akun
+          </Button>
         </div>
       </div>
+
+      {cropFile && (
+        <AvatarCropDialog
+          file={cropFile}
+          onCancel={() => setCropFile(null)}
+          onSave={saveCroppedAvatar}
+        />
+      )}
     </div>
   )
 }
