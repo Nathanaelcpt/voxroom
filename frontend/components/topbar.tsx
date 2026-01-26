@@ -10,7 +10,7 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
-import { Sun, Moon } from "lucide-react"
+import { Sun, Moon, Link } from "lucide-react"
 
 export default function Topbar() {
   const { user, loading } = useUser()
@@ -30,9 +30,12 @@ export default function Topbar() {
       <header className="fixed top-0 z-50 w-full border-b bg-background text-foreground">
         <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-6">
           {/* Left */}
-          <span className="text-lg font-semibold">
+          <Link
+            href="/"
+            className="text-lg font-semibold hover:opacity-80"
+          >
             VoxRoom
-          </span>
+          </Link>
 
           {/* Middle */}
           <input

@@ -14,10 +14,6 @@ export default function HomePage() {
   return (
     <>
       <section className="flex flex-col gap-6 p-6 bg-background text-foreground">
-        <div className="rounded-md border bg-white text-black dark:bg-black dark:text-white p-4">
-          TEST DARK MODE (HARUS PUTIH → HITAM)
-        </div>
-
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">
             Live Rooms
