@@ -31,43 +31,52 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second) // 🆕 Increase timeout
 	defer cancel()
-
-	tx, err := db.Pool.Begin(ctx)
-	if err != nil {
-		http.Error(w, "db begin error", http.StatusInternalServerError)
-		return
-	}
-	defer tx.Rollback(ctx)
 
 	var roomID string
 
-	// 1️⃣ create room
-	err = tx.QueryRow(ctx, `
-		insert into rooms (title, host_id, is_live)
-		values ($1, $2, true)
-		returning id
-	`, req.Title, userID).Scan(&roomID)
+	// 🆕 Use ExecuteWithRetry for database operations
+	err := db.ExecuteWithRetry(ctx, 3, func(ctx context.Context) error {
+		tx, err := db.Pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+
+		// 1️⃣ create room
+		err = tx.QueryRow(ctx, `
+			INSERT INTO rooms (title, host_id, is_live)
+			VALUES ($1, $2, true)
+			RETURNING id
+		`, req.Title, userID).Scan(&roomID)
+
+		if err != nil {
+			return err
+		}
+
+		// 2️⃣ host auto join
+		_, err = tx.Exec(ctx, `
+			INSERT INTO room_participants (room_id, user_id, role)
+			VALUES ($1, $2, 'host')
+		`, roomID, userID)
+
+		if err != nil {
+			return err
+		}
+
+		return tx.Commit(ctx)
+	})
 
 	if err != nil {
-		http.Error(w, "failed create room", http.StatusInternalServerError)
-		return
-	}
-
-	// 2️⃣ host auto join
-	_, err = tx.Exec(ctx, `
-		insert into room_participants (room_id, user_id, role)
-		values ($1, $2, 'host')
-	`, roomID, userID)
-
-	if err != nil {
-		http.Error(w, "failed join host", http.StatusInternalServerError)
-		return
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, "commit failed", http.StatusInternalServerError)
+		// 🆕 Better error handling
+		if ctx.Err() == context.DeadlineExceeded {
+			http.Error(w, "request timeout", http.StatusRequestTimeout)
+		} else if db.IsConnectionError(err) {
+			http.Error(w, "database temporarily unavailable", http.StatusServiceUnavailable)
+		} else {
+			http.Error(w, "failed to create room", http.StatusInternalServerError)
+		}
 		return
 	}
 
