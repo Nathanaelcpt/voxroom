@@ -112,7 +112,7 @@ func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 			r.id,
 			r.title,
 			r.is_live,
-			COUNT(rp.user_id) AS listeners
+			COUNT(rp.user_id) FILTER (WHERE rp.left_at IS NULL) AS listeners
 		FROM rooms r
 		LEFT JOIN room_participants rp ON rp.room_id = r.id
 		WHERE r.is_live = true

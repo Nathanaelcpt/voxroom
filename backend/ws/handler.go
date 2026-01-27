@@ -2,7 +2,6 @@ package ws
 
 import (
 	"net/http"
-
 	"voxroom/backend/auth"
 
 	"github.com/gorilla/websocket"
@@ -15,15 +14,11 @@ var upgrader = websocket.Upgrader{
 func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("roomId")
 	if roomID == "" {
-		http.Error(w, "missing roomId", http.StatusBadRequest)
+		http.Error(w, "missing roomId", 400)
 		return
 	}
 
-	userID, ok := r.Context().Value(auth.UserIDKey).(string)
-	if !ok || userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
+	userID := auth.MustUserID(r.Context())
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -51,7 +46,6 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 			if err := conn.ReadJSON(&msg); err != nil {
 				return
 			}
-
 			msg.RoomID = roomID
 			msg.From = userID
 			hub.Broadcast <- msg
