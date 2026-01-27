@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"voxroom/backend/auth"
 	"voxroom/backend/db"
 )
+
+/* =======================
+   TYPES
+======================= */
 
 type CreateRoomRequest struct {
 	Title string `json:"title"`
@@ -20,13 +25,10 @@ type CreateRoomResponse struct {
 }
 
 type Room struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	HostID      string    `json:"host_id"`
-	HostName    string    `json:"host_name"`
-	IsLive      bool      `json:"is_live"`
-	CreatedAt   time.Time `json:"created_at"`
-	Listeners   int       `json:"listeners"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	IsLive    bool   `json:"is_live"`
+	Listeners int    `json:"listeners"`
 }
 
 type RoomDetail struct {
@@ -35,26 +37,26 @@ type RoomDetail struct {
 }
 
 type Participant struct {
-	UserID   string `json:"user_id"`
-	Username string `json:"username"`
-	Role     string `json:"role"`
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
 }
 
-// CREATE ROOM
+/* =======================
+   CREATE ROOM
+======================= */
+
 func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	var req CreateRoomRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid body", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Title == "" {
+		writeJSONError(w, "invalid body", http.StatusBadRequest)
 		return
 	}
-
-	log.Printf("📝 Creating room: %s by user: %s", req.Title, userID)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -68,13 +70,11 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 		}
 		defer tx.Rollback(ctx)
 
-		err = tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO rooms (title, host_id, is_live)
 			VALUES ($1, $2, true)
 			RETURNING id
-		`, req.Title, userID).Scan(&roomID)
-
-		if err != nil {
+		`, req.Title, userID).Scan(&roomID); err != nil {
 			return err
 		}
 
@@ -91,233 +91,177 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		log.Printf("❌ Failed to create room: %v", err)
-		if ctx.Err() == context.DeadlineExceeded {
-			http.Error(w, "request timeout", http.StatusRequestTimeout)
-		} else if db.IsConnectionError(err) {
-			http.Error(w, "database temporarily unavailable", http.StatusServiceUnavailable)
-		} else {
-			http.Error(w, "failed to create room", http.StatusInternalServerError)
-		}
+		log.Println("❌ CreateRoom:", err)
+		writeJSONError(w, "failed to create room", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Room created: %s", roomID)
-
-	res := CreateRoomResponse{
-		RoomID: roomID,
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(res)
+	writeJSON(w, CreateRoomResponse{RoomID: roomID})
 }
 
-// 🆕 GET ACTIVE ROOMS
-func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
-	log.Println("📋 Fetching active rooms")
+/* =======================
+   GET ACTIVE ROOMS
+======================= */
 
+func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
-			r.id, 
-			r.title, 
-			r.host_id,
-			COALESCE(u.display_name, u.username, 'Unknown') as host_name,
-			r.created_at,
+			r.id,
+			r.title,
 			r.is_live,
-			COALESCE(COUNT(rp.user_id), 0) as listeners
+			COUNT(rp.user_id) AS listeners
 		FROM rooms r
-		LEFT JOIN auth.users u ON r.host_id = u.id
-		LEFT JOIN room_participants rp ON r.id = rp.room_id
+		LEFT JOIN room_participants rp ON rp.room_id = r.id
 		WHERE r.is_live = true
-		GROUP BY r.id, r.title, r.host_id, u.display_name, u.username, r.created_at, r.is_live
-		ORDER BY r.created_at DESC
-		LIMIT 50
+		GROUP BY r.id
+		ORDER BY r.id DESC
 	`)
-
 	if err != nil {
-		log.Printf("❌ Query error: %v", err)
-		http.Error(w, "failed to fetch rooms", http.StatusInternalServerError)
+		log.Println("❌ GetActiveRooms:", err)
+		writeJSONError(w, "failed to fetch rooms", 500)
 		return
 	}
 	defer rows.Close()
 
 	var rooms []Room
+
 	for rows.Next() {
-		var room Room
-		err := rows.Scan(
-			&room.ID,
-			&room.Title,
-			&room.HostID,
-			&room.HostName,
-			&room.CreatedAt,
-			&room.IsLive,
-			&room.Listeners,
-		)
-		if err != nil {
-			log.Printf("⚠️ Scan error: %v", err)
-			continue
+		var r Room
+		if err := rows.Scan(&r.ID, &r.Title, &r.IsLive, &r.Listeners); err == nil {
+			rooms = append(rooms, r)
 		}
-		rooms = append(rooms, room)
 	}
 
 	if rooms == nil {
 		rooms = []Room{}
 	}
 
-	log.Printf("✅ Found %d active rooms", len(rooms))
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(rooms)
+	writeJSON(w, rooms)
 }
 
-// 🆕 GET ROOM DETAILS
+/* =======================
+   GET ROOM DETAILS
+======================= */
+
 func GetRoomDetails(w http.ResponseWriter, r *http.Request) {
-	// Extract roomId dari path
-	roomID := r.PathValue("roomId")
-	if roomID == "" {
-		http.Error(w, "room id required", http.StatusBadRequest)
+	roomID := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	if roomID == "" || strings.Contains(roomID, "/") {
+		writeJSONError(w, "room id required", 400)
 		return
 	}
-
-	log.Printf("🔍 Fetching room details: %s", roomID)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Get room info
 	var room Room
 	err := db.Pool.QueryRow(ctx, `
-		SELECT 
-			r.id, 
-			r.title, 
-			r.host_id, 
-			COALESCE(u.display_name, u.username, 'Unknown') as host_name,
-			r.created_at, 
-			r.is_live
-		FROM rooms r
-		LEFT JOIN auth.users u ON r.host_id = u.id
-		WHERE r.id = $1
-	`, roomID).Scan(
-		&room.ID,
-		&room.Title,
-		&room.HostID,
-		&room.HostName,
-		&room.CreatedAt,
-		&room.IsLive,
-	)
+		SELECT id, title, is_live
+		FROM rooms
+		WHERE id = $1
+	`, roomID).Scan(&room.ID, &room.Title, &room.IsLive)
 
 	if err != nil {
-		log.Printf("❌ Room not found: %v", err)
-		http.Error(w, "room not found", http.StatusNotFound)
+		writeJSONError(w, "room not found", 404)
 		return
 	}
 
-	// Get participants
 	rows, err := db.Pool.Query(ctx, `
-		SELECT 
-			rp.user_id, 
-			COALESCE(u.display_name, u.username, 'Unknown') as username,
-			rp.role
-		FROM room_participants rp
-		LEFT JOIN auth.users u ON rp.user_id = u.id
-		WHERE rp.room_id = $1
+		SELECT user_id, role
+		FROM room_participants
+		WHERE room_id = $1
 	`, roomID)
 
-	if err != nil {
-		log.Printf("⚠️ Failed to get participants: %v", err)
-		// Continue without participants
-	} else {
+	var participants []Participant
+	if err == nil {
 		defer rows.Close()
-
-		var participants []Participant
 		for rows.Next() {
 			var p Participant
-			err := rows.Scan(&p.UserID, &p.Username, &p.Role)
-			if err != nil {
-				continue
+			if rows.Scan(&p.UserID, &p.Role) == nil {
+				participants = append(participants, p)
 			}
-			participants = append(participants, p)
 		}
-
-		room.Listeners = len(participants)
-
-		detail := RoomDetail{
-			Room:         room,
-			Participants: participants,
-		}
-
-		log.Printf("✅ Room details: %s (%d participants)", room.Title, len(participants))
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(detail)
-		return
 	}
 
-	// Fallback without participants
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(RoomDetail{
+	room.Listeners = len(participants)
+
+	writeJSON(w, RoomDetail{
 		Room:         room,
-		Participants: []Participant{},
+		Participants: participants,
 	})
 }
 
-// 🆕 JOIN ROOM
+/* =======================
+   JOIN ROOM
+======================= */
+
 func JoinRoom(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		writeJSONError(w, "unauthorized", 401)
 		return
 	}
 
-	roomID := r.PathValue("roomId")
+	roomID := strings.TrimSuffix(
+		strings.TrimPrefix(r.URL.Path, "/rooms/"),
+		"/join",
+	)
+
 	if roomID == "" {
-		http.Error(w, "room id required", http.StatusBadRequest)
+		writeJSONError(w, "room id required", 400)
 		return
 	}
-
-	log.Printf("👋 User %s joining room %s", userID, roomID)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	// Check if room exists and is live
 	var isLive bool
-	err := db.Pool.QueryRow(ctx, `
-		SELECT is_live FROM rooms WHERE id = $1
-	`, roomID).Scan(&isLive)
+	err := db.Pool.QueryRow(ctx,
+		`SELECT is_live FROM rooms WHERE id = $1`, roomID,
+	).Scan(&isLive)
 
 	if err != nil {
-		log.Printf("❌ Room not found: %v", err)
-		http.Error(w, "room not found", http.StatusNotFound)
+		writeJSONError(w, "room not found", 404)
 		return
 	}
 
 	if !isLive {
-		http.Error(w, "room is not live", http.StatusForbidden)
+		writeJSONError(w, "room is not live", 403)
 		return
 	}
 
-	// Add user as listener
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO room_participants (room_id, user_id, role)
 		VALUES ($1, $2, 'listener')
-		ON CONFLICT (room_id, user_id) DO NOTHING
+		ON CONFLICT DO NOTHING
 	`, roomID, userID)
 
 	if err != nil {
-		log.Printf("❌ Failed to join room: %v", err)
-		http.Error(w, "failed to join room", http.StatusInternalServerError)
+		writeJSONError(w, "failed to join room", 500)
 		return
 	}
 
-	log.Printf("✅ User %s joined room %s", userID, roomID)
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	writeJSON(w, map[string]string{
 		"status":  "joined",
 		"room_id": roomID,
+	})
+}
+
+/* =======================
+   HELPERS
+======================= */
+
+func writeJSON(w http.ResponseWriter, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeJSONError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": msg,
 	})
 }
