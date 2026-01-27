@@ -24,46 +24,38 @@ func main() {
 		log.Printf("🔌 Connecting to database (attempt %d/5)...", i)
 		err = db.Connect(databaseURL)
 		if err == nil {
-			log.Println("✅ Database connected successfully")
+			log.Println("✅ Database connected")
 			break
 		}
-		if i < 5 {
-			delay := time.Duration(i) * 3 * time.Second
-			log.Printf("⏳ DB not ready, retry in %v...", delay)
-			time.Sleep(delay)
-		}
+		time.Sleep(time.Duration(i) * 3 * time.Second)
 	}
-
 	if err != nil {
 		log.Fatal("❌ DB CONNECT ERROR:", err)
 	}
-
 	defer db.Close()
 
 	// WebSocket hub
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// Routes
 	mux := http.NewServeMux()
 
-	// Health check
+	// Health
 	mux.HandleFunc("GET /health", handleHealth)
 
-	// 🆕 Room endpoints
+	// Rooms
 	mux.HandleFunc("GET /rooms", room.GetActiveRooms)
 	mux.HandleFunc("POST /rooms", withAuth(room.CreateRoom))
-	mux.HandleFunc("GET /rooms/{roomId}", room.GetRoomDetails)
-	mux.HandleFunc("POST /rooms/{roomId}/join", withAuth(room.JoinRoom))
 
-	// WebSocket
-	mux.Handle("/ws", auth.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-	log.Printf("🔌 WebSocket connection from %s", r.RemoteAddr)
-	ws.ServeWS(hub, w, r)
-	})))
+	// Prefix routing (AMAN)
+	mux.HandleFunc("GET /rooms/", room.GetRoomDetails)
+	mux.HandleFunc("POST /rooms/", withAuth(room.JoinRoom))
 
+	// WebSocket (AUTH)
+	mux.Handle("/ws", withAuthWS(func(w http.ResponseWriter, r *http.Request) {
+		ws.ServeWS(hub, w, r)
+	}))
 
-	// CORS wrapper
 	handler := corsMiddleware(mux)
 
 	port := os.Getenv("PORT")
@@ -72,34 +64,34 @@ func main() {
 	}
 
 	log.Printf("🚀 Backend running on :%s", port)
-	log.Println("📋 Routes:")
-	log.Println("   GET  /health")
-	log.Println("   GET  /rooms")
-	log.Println("   POST /rooms")
-	log.Println("   GET  /rooms/{roomId}")
-	log.Println("   POST /rooms/{roomId}/join")
-	log.Println("   WS   /ws")
-
 	log.Fatal(http.ListenAndServe(":"+port, handler))
+}
+
+//
+// ================= HELPER =================
+//
+
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(`{"status":"healthy"}`))
 }
 
 func withAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("📥 %s %s (protected)", r.Method, r.URL.Path)
 		auth.AuthMiddleware(http.HandlerFunc(handler)).ServeHTTP(w, r)
 	}
 }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	log.Println("📍 Health check")
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"healthy","service":"voxroom-backend"}`))
+// khusus WebSocket (AuthMiddleware + HandlerFunc)
+func withAuthWS(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		auth.AuthMiddleware(http.HandlerFunc(handler)).ServeHTTP(w, r)
+	}
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("📨 %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
 		origin := r.Header.Get("Origin")
 		if origin == "" {
@@ -112,7 +104,6 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 
 		if r.Method == http.MethodOptions {
-			log.Printf("✅ CORS preflight for %s", r.URL.Path)
 			w.WriteHeader(http.StatusOK)
 			return
 		}

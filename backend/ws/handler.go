@@ -2,6 +2,7 @@ package ws
 
 import (
 	"net/http"
+
 	"voxroom/backend/auth"
 
 	"github.com/gorilla/websocket"
@@ -53,7 +54,6 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 			msg.RoomID = roomID
 			msg.From = userID
-
 			hub.Broadcast <- msg
 		}
 	}()

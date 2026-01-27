@@ -27,13 +27,32 @@ func (h *Hub) Run() {
 			h.Rooms[c.RoomID][c] = true
 
 		case c := <-h.Unregister:
-			delete(h.Rooms[c.RoomID], c)
+			clients, ok := h.Rooms[c.RoomID]
+			if ok {
+				if _, exists := clients[c]; exists {
+					delete(clients, c)
+					close(c.Send)
+				}
+				if len(clients) == 0 {
+					delete(h.Rooms, c.RoomID)
+				}
+			}
 
 		case msg := <-h.Broadcast:
-			for c := range h.Rooms[msg.RoomID] {
-				// relay ke semua kecuali pengirim
-				if c.UserID != msg.From {
-					c.Send <- msg
+			clients, ok := h.Rooms[msg.RoomID]
+			if !ok {
+				continue
+			}
+
+			for c := range clients {
+				if c.UserID == msg.From {
+					continue
+				}
+				select {
+				case c.Send <- msg:
+				default:
+					close(c.Send)
+					delete(clients, c)
 				}
 			}
 		}
