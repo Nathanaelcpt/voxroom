@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,72 +10,28 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/MicahParks/keyfunc"
-	"github.com/golang-jwt/jwt/v4"
 )
 
 type contextKey string
 
 const UserIDKey contextKey = "user_id"
 
-const jwksURL = "https://ecvtonwwjwjixwfhjtdh.supabase.co/auth/v1/keys"
+// Supabase user response
+type SupabaseUser struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Role  string `json:"role"`
+}
 
+// Cache untuk performa
 var (
-	jwks     *keyfunc.JWKS
-	jwksOnce sync.Once
-	jwksErr  error
-	jwksMu   sync.RWMutex
+	tokenCache = make(map[string]*CachedUser)
+	cacheMu    sync.RWMutex
 )
 
-func loadJWKS() error {
-	jwksMu.RLock()
-	if jwks != nil && jwksErr == nil {
-		jwksMu.RUnlock()
-		return nil
-	}
-	jwksMu.RUnlock()
-
-	jwksMu.Lock()
-	defer jwksMu.Unlock()
-
-	if jwks != nil && jwksErr == nil {
-		return nil
-	}
-
-	log.Printf("🔑 Loading JWKS from %s", jwksURL)
-
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	var lastErr error
-	for i := 0; i < 3; i++ {
-		options := keyfunc.Options{
-			Client:          client,
-			RefreshInterval: time.Hour,
-			RefreshErrorHandler: func(err error) {
-				log.Printf("⚠️ JWKS refresh error: %v", err)
-			},
-		}
-
-		jwks, lastErr = keyfunc.Get(jwksURL, options)
-		if lastErr == nil {
-			log.Println("✅ JWKS loaded successfully")
-			jwksErr = nil
-			return nil
-		}
-
-		log.Printf("⚠️ JWKS load attempt %d/3 failed: %v", i+1, lastErr)
-		
-		if i < 2 {
-			time.Sleep(time.Duration(i+1) * time.Second)
-		}
-	}
-
-	jwksErr = fmt.Errorf("failed to load JWKS after 3 attempts: %w", lastErr)
-	log.Printf("❌ %v", jwksErr)
-	return jwksErr
+type CachedUser struct {
+	UserID    string
+	ExpiresAt time.Time
 }
 
 func AuthMiddleware(next http.Handler) http.Handler {
@@ -101,97 +58,111 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		tokenStr := parts[1]
-		log.Printf("🎫 Token received: %s...", tokenStr[:min(20, len(tokenStr))])
+		token := parts[1]
+		log.Printf("🎫 Token received: %s...", token[:min(20, len(token))])
 
-		// Try JWKS first (modern way)
-		token, err := validateWithJWKS(tokenStr)
-		if err == nil && token.Valid {
-			userID, err := extractUserID(token)
-			if err != nil {
-				log.Printf("❌ Extract user ID error: %v", err)
-				http.Error(w, "invalid token claims", http.StatusUnauthorized)
+		// Check cache first (avoid calling Supabase every time)
+		cacheMu.RLock()
+		if cached, ok := tokenCache[token]; ok {
+			if time.Now().Before(cached.ExpiresAt) {
+				cacheMu.RUnlock()
+				log.Printf("✅ Auth from cache - User ID: %s", cached.UserID)
+				ctx := context.WithValue(r.Context(), UserIDKey, cached.UserID)
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-
-			log.Printf("✅ Auth successful (JWKS) - User ID: %s", userID)
-			ctx := context.WithValue(r.Context(), UserIDKey, userID)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
 		}
+		cacheMu.RUnlock()
 
-		// Fallback to JWT Secret (legacy way)
-		log.Printf("⚠️ JWKS validation failed: %v, trying JWT Secret fallback", err)
-		token, err = validateWithSecret(tokenStr)
+		// Validate with Supabase
+		user, err := validateTokenWithSupabase(r.Context(), token)
 		if err != nil {
-			log.Printf("❌ JWT Secret validation also failed: %v", err)
+			log.Printf("❌ Token validation failed: %v", err)
 			http.Error(w, "invalid token", http.StatusUnauthorized)
 			return
 		}
 
-		if !token.Valid {
-			log.Println("❌ Token is not valid")
-			http.Error(w, "invalid token", http.StatusUnauthorized)
-			return
-		}
+		log.Printf("✅ Auth successful - User ID: %s, Email: %s", user.ID, user.Email)
 
-		userID, err := extractUserID(token)
-		if err != nil {
-			log.Printf("❌ Extract user ID error: %v", err)
-			http.Error(w, "invalid token claims", http.StatusUnauthorized)
-			return
+		// Cache for 5 minutes
+		cacheMu.Lock()
+		tokenCache[token] = &CachedUser{
+			UserID:    user.ID,
+			ExpiresAt: time.Now().Add(5 * time.Minute),
 		}
+		cacheMu.Unlock()
 
-		log.Printf("✅ Auth successful (Secret) - User ID: %s", userID)
-		ctx := context.WithValue(r.Context(), UserIDKey, userID)
+		ctx := context.WithValue(r.Context(), UserIDKey, user.ID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 
-// Validate token using JWKS (supports ES256)
-func validateWithJWKS(tokenStr string) (*jwt.Token, error) {
-	if err := loadJWKS(); err != nil {
-		return nil, fmt.Errorf("JWKS not available: %w", err)
-	}
-
-	token, err := jwt.Parse(tokenStr, jwks.Keyfunc)
-	if err != nil {
-		return nil, err
-	}
-
-	return token, nil
-}
-
-// Validate token using JWT Secret (HS256 only)
-func validateWithSecret(tokenStr string) (*jwt.Token, error) {
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		return nil, fmt.Errorf("JWT_SECRET not configured")
-	}
-
-	token, err := jwt.Parse(tokenStr, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+// ValidateToken - exported for WebSocket auth
+func ValidateToken(ctx context.Context, token string) (*SupabaseUser, error) {
+	// Check cache first
+	cacheMu.RLock()
+	if cached, ok := tokenCache[token]; ok {
+		if time.Now().Before(cached.ExpiresAt) {
+			cacheMu.RUnlock()
+			// Return cached user (need to fetch from cache or create simple struct)
+			return &SupabaseUser{ID: cached.UserID}, nil
 		}
-		return []byte(jwtSecret), nil
-	})
+	}
+	cacheMu.RUnlock()
 
-	return token, err
+	return validateTokenWithSupabase(ctx, token)
 }
 
-// Extract user ID from token claims
-func extractUserID(token *jwt.Token) (string, error) {
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return "", fmt.Errorf("invalid claims format")
+func validateTokenWithSupabase(ctx context.Context, token string) (*SupabaseUser, error) {
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		supabaseURL = "https://ecvtonwwjwjixwfhjtdh.supabase.co"
 	}
 
-	userID, ok := claims["sub"].(string)
-	if !ok || userID == "" {
-		return "", fmt.Errorf("no user ID in claims")
+	apiKey := os.Getenv("SUPABASE_ANON_KEY")
+	if apiKey == "" {
+		return nil, fmt.Errorf("SUPABASE_ANON_KEY not set")
 	}
 
-	return userID, nil
+	// Call Supabase auth/v1/user endpoint
+	url := fmt.Sprintf("%s/auth/v1/user", strings.TrimSuffix(supabaseURL, "/"))
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request error: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("apikey", apiKey)
+
+	log.Printf("🔍 Validating token with Supabase: %s", url)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request error: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("invalid token: status %d", resp.StatusCode)
+	}
+
+	var user SupabaseUser
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return nil, fmt.Errorf("decode error: %w", err)
+	}
+
+	if user.ID == "" {
+		return nil, fmt.Errorf("invalid user data")
+	}
+
+	log.Printf("✅ Token validated - User: %s (%s)", user.ID, user.Email)
+
+	return &user, nil
 }
 
 func min(a, b int) int {

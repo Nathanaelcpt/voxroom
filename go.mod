@@ -3,8 +3,6 @@ module voxroom
 go 1.24.0
 
 require (
-	github.com/MicahParks/keyfunc v1.9.0
-	github.com/golang-jwt/jwt/v4 v4.5.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/pion/webrtc/v3 v3.3.6
