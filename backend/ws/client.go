@@ -1,8 +1,6 @@
 package ws
 
 import (
-	"encoding/json"
-
 	"github.com/gorilla/websocket"
 )
 
@@ -17,7 +15,9 @@ func (c *Client) WritePump() {
 	defer c.Conn.Close()
 
 	for msg := range c.Send {
-		data, _ := json.Marshal(msg)
-		c.Conn.WriteMessage(websocket.TextMessage, data)
+		if err := c.Conn.WriteJSON(msg); err != nil {
+			return
+		}
 	}
 }
+

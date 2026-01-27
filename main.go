@@ -13,9 +13,7 @@ import (
 )
 
 func main() {
-	// ======================
-	// DATABASE (retry friendly)
-	// ======================
+	// Database
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("❌ DATABASE_URL not set")
@@ -42,32 +40,30 @@ func main() {
 
 	defer db.Close()
 
-	// ======================
-	// WEBSOCKET HUB
-	// ======================
+	// WebSocket hub
 	hub := ws.NewHub()
 	go hub.Run()
 
-	// ======================
-	// ROUTES
-	// ======================
+	// Routes
 	mux := http.NewServeMux()
 
 	// Health check
 	mux.HandleFunc("GET /health", handleHealth)
 
-	// 🆕 Protected routes dengan helper
+	// 🆕 Room endpoints
+	mux.HandleFunc("GET /rooms", room.GetActiveRooms)
 	mux.HandleFunc("POST /rooms", withAuth(room.CreateRoom))
+	mux.HandleFunc("GET /rooms/{roomId}", room.GetRoomDetails)
+	mux.HandleFunc("POST /rooms/{roomId}/join", withAuth(room.JoinRoom))
 
 	// WebSocket
-	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("🔌 WebSocket connection from %s", r.RemoteAddr)
-		ws.ServeWS(hub, w, r)
-	})
+	mux.Handle("/ws", auth.AuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	log.Printf("🔌 WebSocket connection from %s", r.RemoteAddr)
+	ws.ServeWS(hub, w, r)
+	})))
 
-	// ======================
-	// CORS WRAPPER
-	// ======================
+
+	// CORS wrapper
 	handler := corsMiddleware(mux)
 
 	port := os.Getenv("PORT")
@@ -76,10 +72,17 @@ func main() {
 	}
 
 	log.Printf("🚀 Backend running on :%s", port)
+	log.Println("📋 Routes:")
+	log.Println("   GET  /health")
+	log.Println("   GET  /rooms")
+	log.Println("   POST /rooms")
+	log.Println("   GET  /rooms/{roomId}")
+	log.Println("   POST /rooms/{roomId}/join")
+	log.Println("   WS   /ws")
+
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
 
-// 🆕 Helper: wrap handler dengan auth
 func withAuth(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("📥 %s %s (protected)", r.Method, r.URL.Path)
@@ -87,7 +90,6 @@ func withAuth(handler http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// 🆕 Health check handler
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	log.Println("📍 Health check")
 	w.Header().Set("Content-Type", "application/json")
@@ -95,7 +97,6 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"healthy","service":"voxroom-backend"}`))
 }
 
-// 🆕 CORS middleware
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("📨 %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)

@@ -1,42 +1,55 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { AuthDialog } from "@/components/auth-dialog"
 import { useUser } from "@/hooks/use-user"
 import { getAccessToken } from "@/lib/auth"
 
-const rooms = ["andi", "budi", "charlie"]
+type Room = {
+  id: string
+  title: string
+  host_name: string
+  listeners: number
+}
 
 export default function HomePage() {
   const { user, loading } = useUser()
   const [open, setOpen] = useState(false)
+  const [rooms, setRooms] = useState<Room[]>([])
   const router = useRouter()
 
-  async function joinRoom(roomName: string) {
+  useEffect(() => {
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/rooms`)
+      .then(res => res.json())
+      .then(setRooms)
+      .catch(console.error)
+  }, [])
+
+  async function joinRoom(roomId: string) {
     if (!user) {
       setOpen(true)
       return
     }
 
     const token = await getAccessToken()
-
-    // 🔍 DEBUG (hapus nanti)
-    console.log("=== JOIN ROOM DEBUG ===")
-    console.log("Room:", roomName)
-    console.log("User ID:", user.id)
-    console.log("JWT OK:", !!token)
-    console.log("JWT Preview:", token?.slice(0, 20), "...")
-
     if (!token) {
-      alert("Session invalid, silakan login ulang")
+      alert("Session invalid")
       return
     }
 
-    // NEXT STEP:
-    // router.push(`/room/${roomName}`)
-    // connect WebSocket pakai token
+    await fetch(
+      `${process.env.NEXT_PUBLIC_API_URL}/rooms/${roomId}/join`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    )
+
+    router.push(`/room/${roomId}`)
   }
 
   function startStreaming() {
@@ -44,59 +57,41 @@ export default function HomePage() {
       setOpen(true)
       return
     }
-
     router.push("/go-live/setup")
   }
 
   if (loading) {
-    return (
-      <div className="p-6 text-sm text-muted-foreground">
-        Loading...
-      </div>
-    )
+    return <div className="p-6 text-sm text-muted-foreground">Loading…</div>
   }
 
   return (
     <>
-      <section className="flex flex-col gap-6 p-6 bg-background text-foreground">
-        {/* Header */}
-        <div className="flex items-center justify-between gap-4 flex-wrap">
+      <section className="flex flex-col gap-6 p-6">
+        <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              Live Rooms
-            </h1>
+            <h1 className="text-2xl font-semibold">Live Rooms</h1>
             <p className="text-sm text-muted-foreground">
-              Temukan room yang sedang live atau mulai siaranmu sendiri
+              Temukan room yang sedang live
             </p>
           </div>
 
-          <Button onClick={startStreaming}>
-            Mulai Streaming
-          </Button>
+          <Button onClick={startStreaming}>Mulai Streaming</Button>
         </div>
 
-        {/* Rooms */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {rooms.map((name) => (
+          {rooms.map(room => (
             <div
-              key={name}
-              className="rounded-xl border bg-card p-4 transition hover:shadow-md"
+              key={room.id}
+              className="rounded-xl border bg-card p-4"
             >
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted font-semibold">
-                  {name[0].toUpperCase()}
-                </div>
-                <div>
-                  <p className="font-medium">{name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    Live · Audio only
-                  </p>
-                </div>
-              </div>
+              <p className="font-medium">{room.title}</p>
+              <p className="text-xs text-muted-foreground">
+                {room.listeners} listening · Host {room.host_name}
+              </p>
 
               <Button
                 className="mt-4 w-full"
-                onClick={() => joinRoom(name)}
+                onClick={() => joinRoom(room.id)}
               >
                 Join Room
               </Button>

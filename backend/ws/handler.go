@@ -1,8 +1,8 @@
 package ws
 
 import (
-	"encoding/json"
 	"net/http"
+	"voxroom/backend/auth"
 
 	"github.com/gorilla/websocket"
 )
@@ -12,11 +12,15 @@ var upgrader = websocket.Upgrader{
 }
 
 func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
-	roomID := r.URL.Query().Get("room")
-	userID := r.URL.Query().Get("user")
+	roomID := r.URL.Query().Get("roomId")
+	if roomID == "" {
+		http.Error(w, "missing roomId", http.StatusBadRequest)
+		return
+	}
 
-	if roomID == "" || userID == "" {
-		http.Error(w, "missing room or user", 400)
+	userID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
@@ -27,13 +31,13 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	client := &Client{
 		Conn:   conn,
-		Send:   make(chan Message, 10),
+		Send:   make(chan Message, 16),
 		UserID: userID,
 		RoomID: roomID,
 	}
 
-	go client.WritePump()
 	hub.Register <- client
+	go client.WritePump()
 
 	go func() {
 		defer func() {
@@ -42,14 +46,9 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		}()
 
 		for {
-			_, data, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-
 			var msg Message
-			if err := json.Unmarshal(data, &msg); err != nil {
-				continue
+			if err := conn.ReadJSON(&msg); err != nil {
+				return
 			}
 
 			msg.RoomID = roomID
