@@ -42,7 +42,6 @@ export default function RoomPage() {
 
         case "role_updated":
           if (message.payload?.user_id && message.payload?.role) {
-            // Update participant role
             setParticipants((prev) =>
               prev.map((p) =>
                 p.user_id === message.payload.user_id
@@ -51,7 +50,6 @@ export default function RoomPage() {
               )
             )
 
-            // ✅ Explicit null check
             if (user !== null && message.payload.user_id === user.id) {
               setMyRole(message.payload.role)
               console.log("✅ Your role updated:", message.payload.role)
@@ -97,15 +95,15 @@ export default function RoomPage() {
     }
 
     async function loadRoom() {
-      // ✅ Type guard: user is guaranteed non-null here
-      if (!user) return
+      // ✅ Double check inside async function
+      if (!roomId || !user) return
 
       try {
-        const data = await getRoomDetails(roomId)
+        // ✅ Use non-null assertion operator (!) - we already checked above
+        const data = await getRoomDetails(roomId!)
         setRoom(data)
         setParticipants(data.participants)
 
-        // Find my role
         const me = data.participants.find((p) => p.user_id === user.id)
         if (me) {
           setMyRole(me.role)
@@ -140,6 +138,7 @@ export default function RoomPage() {
 
   // End room (host only)
   async function handleEndRoom() {
+    // ✅ Type guard ensures roomId is not undefined
     if (!isHost || !roomId) return
 
     const confirmed = confirm(
@@ -149,7 +148,8 @@ export default function RoomPage() {
     if (!confirmed) return
 
     try {
-      await endRoom(roomId)
+      // ✅ Use non-null assertion - we checked above
+      await endRoom(roomId!)
       router.push("/")
     } catch (err) {
       console.error("Failed to end room:", err)
@@ -177,8 +177,6 @@ export default function RoomPage() {
   if (!room) {
     return null
   }
-
-  // ✅ At this point, TypeScript knows user is not null (due to early return above)
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -226,7 +224,6 @@ export default function RoomPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-col items-center justify-center py-12 space-y-6">
-                {/* Avatar */}
                 <div className="relative">
                   <div
                     className={`absolute inset-0 rounded-full ${
@@ -240,7 +237,6 @@ export default function RoomPage() {
                   </Avatar>
                 </div>
 
-                {/* Status */}
                 <div className="text-center">
                   <p className="text-lg font-semibold">
                     {isHost
@@ -254,7 +250,6 @@ export default function RoomPage() {
                   </Badge>
                 </div>
 
-                {/* Mic Control */}
                 {canSpeak && (
                   <>
                     <Button
@@ -282,7 +277,6 @@ export default function RoomPage() {
                 )}
               </div>
 
-              {/* Audio Visualizer Placeholder */}
               <div className="h-24 bg-muted rounded-lg flex items-center justify-center">
                 <div className="flex gap-1 items-end h-16">
                   {[...Array(20)].map((_, i) => (
@@ -313,7 +307,6 @@ export default function RoomPage() {
             <CardContent>
               <div className="space-y-3">
                 {participants.map((participant) => {
-                  // ✅ user is guaranteed non-null at this point
                   const isMe = participant.user_id === user.id
                   const isSpeaker = participant.role === "speaker"
                   const isParticipantHost = participant.role === "host"
