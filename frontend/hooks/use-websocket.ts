@@ -24,7 +24,10 @@ export function useWebSocket({
 
   // Connect to WebSocket
   useEffect(() => {
-    if (!roomId) return
+    if (!roomId) {
+    console.log("⏳ Waiting for roomId...")
+    return
+    }
 
     let mounted = true
 

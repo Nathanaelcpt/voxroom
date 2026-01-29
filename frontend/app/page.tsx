@@ -37,8 +37,8 @@ export default function HomePage() {
 
     loadRooms()
 
-    // Auto-refresh every 10 seconds
-    const interval = setInterval(loadRooms, 10000)
+    // Auto-refresh every 3 seconds
+    const interval = setInterval(loadRooms, 3000)
     return () => clearInterval(interval)
   }, [])
 
