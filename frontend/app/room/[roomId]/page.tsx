@@ -1,186 +1,375 @@
 "use client"
 
 import { useParams, useRouter } from "next/navigation"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { Mic, MicOff, Users, Radio, LogOut } from "lucide-react"
-import { getAccessToken } from "@/lib/auth"
+import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus } from "lucide-react"
 import { useUser } from "@/hooks/use-user"
-
-type ApiParticipant = {
-  user_id: string
-  username: string
-  role: "host" | "speaker" | "listener"
-}
-
-type Participant = {
-  id: string
-  name: string
-  role: "host" | "speaker" | "listener"
-}
+import { getRoomDetails, endRoom } from "@/lib/api/rooms"
+import { useWebSocket } from "@/hooks/use-websocket"
+import type { RoomDetail, Participant, Role } from "@/app/types/room"
+import type { WSMessage } from "@/app/types/websocket"
 
 export default function RoomPage() {
-  const { roomId } = useParams() as { roomId: string }
+  const params = useParams()
   const router = useRouter()
   const { user } = useUser()
 
-  const wsRef = useRef<WebSocket | null>(null)
+  const roomId = params?.roomId as string | undefined
 
-  const [roomTitle, setRoomTitle] = useState("")
+  const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
-  const [isHost, setIsHost] = useState(false)
-  const [status, setStatus] = useState<"connecting" | "connected">("connecting")
-  const [isMuted, setIsMuted] = useState(false)
+  const [myRole, setMyRole] = useState<Role>("listener")
+  const [isMuted, setIsMuted] = useState(true)
+  const [loading, setLoading] = useState(true)
 
-  async function fetchRoom() {
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/rooms/${roomId}`
-    )
-    return res.json()
-  }
+  const canSpeak = myRole === "host" || myRole === "speaker"
+  const isHost = myRole === "host"
 
+  // WebSocket message handler
+  const handleWSMessage = useCallback(
+    (message: WSMessage) => {
+      switch (message.type) {
+        case "role_assigned":
+          if (message.payload?.role) {
+            setMyRole(message.payload.role)
+            console.log("✅ Role assigned:", message.payload.role)
+          }
+          break
+
+        case "role_updated":
+          if (message.payload?.user_id && message.payload?.role) {
+            // Update participant role
+            setParticipants((prev) =>
+              prev.map((p) =>
+                p.user_id === message.payload.user_id
+                  ? { ...p, role: message.payload.role }
+                  : p
+              )
+            )
+
+            // ✅ Explicit null check
+            if (user !== null && message.payload.user_id === user.id) {
+              setMyRole(message.payload.role)
+              console.log("✅ Your role updated:", message.payload.role)
+            }
+          }
+          break
+
+        case "listener_count":
+          if (message.payload?.count !== undefined) {
+            setRoom((prev) =>
+              prev ? { ...prev, listeners: message.payload.count } : prev
+            )
+          }
+          break
+
+        case "room_ended":
+          alert("Room telah ditutup oleh host")
+          router.push("/")
+          break
+
+        default:
+          console.log("📨 Unhandled message:", message.type)
+      }
+    },
+    [user, router]
+  )
+
+  // Connect WebSocket
+  const { isConnected, send } = useWebSocket({
+    roomId: roomId || "",
+    onMessage: handleWSMessage,
+    onOpen: () => console.log("✅ Connected to room"),
+    onClose: () => console.log("🔌 Disconnected from room"),
+  })
+
+  // Load room details
   useEffect(() => {
-    if (!roomId) {
-      router.push("/")
+    if (!roomId || !user) {
+      if (!user) {
+        setLoading(false)
+      }
       return
     }
 
-    async function init() {
-      const data = await fetchRoom()
+    async function loadRoom() {
+      // ✅ Type guard: user is guaranteed non-null here
+      if (!user) return
 
-      setRoomTitle(data.title)
-      setParticipants(
-        data.participants.map((p: ApiParticipant) => ({
-          id: p.user_id,
-          name: p.username,
-          role: p.role,
-        }))
-      )
-      setIsHost(data.host_id === user?.id)
-      setStatus("connected")
+      try {
+        const data = await getRoomDetails(roomId)
+        setRoom(data)
+        setParticipants(data.participants)
 
-      const token = await getAccessToken()
-
-      wsRef.current = new WebSocket(
-        `${process.env.NEXT_PUBLIC_WS_URL}/ws?roomId=${roomId}`,
-        ["authorization", token!]
-      )
-
-      wsRef.current.onmessage = async (e) => {
-        const msg = JSON.parse(e.data)
-
-        if (msg.type === "join" || msg.type === "leave") {
-          const data = await fetchRoom()
-          setParticipants(
-            data.participants.map((p: ApiParticipant) => ({
-              id: p.user_id,
-              name: p.username,
-              role: p.role,
-            }))
-          )
+        // Find my role
+        const me = data.participants.find((p) => p.user_id === user.id)
+        if (me) {
+          setMyRole(me.role)
         }
-
-        if (msg.type === "room-ended") {
-          alert("Room ended")
-          router.push("/")
-        }
+      } catch (err) {
+        console.error("Failed to load room:", err)
+        alert("Room tidak ditemukan")
+        router.push("/")
+      } finally {
+        setLoading(false)
       }
     }
 
-    init()
+    loadRoom()
+  }, [roomId, user, router])
 
-    return () => {
-      wsRef.current?.close()
-    }
-  }, [roomId])
+  // Toggle mic
+  function handleToggleMic() {
+    if (!canSpeak) return
 
-  async function leaveRoom() {
-    const token = await getAccessToken()
+    const newMutedState = !isMuted
+    setIsMuted(newMutedState)
 
-    await fetch(
-      `${process.env.NEXT_PUBLIC_API_URL}/rooms/${roomId}/leave`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
-      }
-    )
+    send(newMutedState ? "mic_off" : "mic_on")
+    console.log(newMutedState ? "🔇 Muted" : "🎤 Unmuted")
+  }
 
-    wsRef.current?.close()
+  // Leave room
+  async function handleLeaveRoom() {
     router.push("/")
   }
 
-  function toggleMute() {
-    setIsMuted(v => !v)
+  // End room (host only)
+  async function handleEndRoom() {
+    if (!isHost || !roomId) return
 
-    wsRef.current?.send(
-      JSON.stringify({
-        type: isMuted ? "mic-on" : "mic-off",
-        room_id: roomId,
-      })
+    const confirmed = confirm(
+      "Yakin ingin mengakhiri room? Semua participant akan keluar."
+    )
+
+    if (!confirmed) return
+
+    try {
+      await endRoom(roomId)
+      router.push("/")
+    } catch (err) {
+      console.error("Failed to end room:", err)
+      alert("Gagal mengakhiri room")
+    }
+  }
+
+  if (!roomId) {
+    return null
+  }
+
+  if (!user || loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
+          <p className="text-sm text-muted-foreground">
+            {!user ? "Please login..." : "Loading room..."}
+          </p>
+        </div>
+      </div>
     )
   }
 
+  if (!room) {
+    return null
+  }
+
+  // ✅ At this point, TypeScript knows user is not null (due to early return above)
+
   return (
-    <div className="min-h-screen p-6">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex justify-between items-center">
-          <div className="flex gap-3 items-center">
-            <Radio className="h-6 w-6 text-primary" />
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Radio className="h-8 w-8 text-primary" />
+              {isConnected && (
+                <div className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-green-500 animate-pulse" />
+              )}
+            </div>
             <div>
-              <h1 className="text-xl font-bold">{roomTitle}</h1>
-              <Badge>{status === "connected" ? "Live" : "Connecting…"}</Badge>
+              <h1 className="text-2xl font-bold">{room.title}</h1>
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Badge variant="secondary" className="gap-1">
+                  <Users className="h-3 w-3" />
+                  {room.listeners} listening
+                </Badge>
+                <span>•</span>
+                <span>{isConnected ? "Connected" : "Connecting..."}</span>
+              </div>
             </div>
           </div>
 
-          <Button variant="destructive" onClick={leaveRoom}>
-            <LogOut className="h-4 w-4 mr-2" />
-            Leave
-          </Button>
+          <div className="flex gap-2">
+            {isHost && (
+              <Button variant="destructive" onClick={handleEndRoom}>
+                End Room
+              </Button>
+            )}
+            <Button variant="outline" onClick={handleLeaveRoom}>
+              <LogOut className="h-4 w-4 mr-2" />
+              Leave
+            </Button>
+          </div>
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Main Stage</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col items-center gap-4">
-            <Avatar className="h-24 w-24">
-              <AvatarFallback>
-                {isHost ? "🎙️" : "👤"}
-              </AvatarFallback>
-            </Avatar>
+        <div className="grid md:grid-cols-3 gap-6">
+          {/* Main Stage */}
+          <Card className="md:col-span-2">
+            <CardHeader>
+              <CardTitle>Live Stage</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex flex-col items-center justify-center py-12 space-y-6">
+                {/* Avatar */}
+                <div className="relative">
+                  <div
+                    className={`absolute inset-0 rounded-full ${
+                      !isMuted && canSpeak ? "bg-primary/20 animate-ping" : ""
+                    }`}
+                  />
+                  <Avatar className="h-32 w-32 border-4 border-primary relative">
+                    <AvatarFallback className="text-4xl">
+                      {isHost ? "🎙️" : canSpeak ? "🗣️" : "👤"}
+                    </AvatarFallback>
+                  </Avatar>
+                </div>
 
-            <Button
-              size="lg"
-              variant={isMuted ? "destructive" : "default"}
-              onClick={toggleMute}
-            >
-              {isMuted ? <MicOff /> : <Mic />}
-            </Button>
-          </CardContent>
-        </Card>
+                {/* Status */}
+                <div className="text-center">
+                  <p className="text-lg font-semibold">
+                    {isHost
+                      ? "You're Live!"
+                      : canSpeak
+                      ? "You're a Speaker"
+                      : "Listening"}
+                  </p>
+                  <Badge variant={isHost ? "default" : "secondary"}>
+                    {myRole}
+                  </Badge>
+                </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Users className="h-4 w-4" />
-              Participants ({participants.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {participants.map(p => (
-              <div
-                key={p.id}
-                className="flex justify-between items-center"
-              >
-                <span>{p.name}</span>
-                <Badge>{p.role}</Badge>
+                {/* Mic Control */}
+                {canSpeak && (
+                  <>
+                    <Button
+                      size="lg"
+                      variant={isMuted ? "destructive" : "default"}
+                      className="rounded-full h-16 w-16 p-0"
+                      onClick={handleToggleMic}
+                    >
+                      {isMuted ? (
+                        <MicOff className="h-6 w-6" />
+                      ) : (
+                        <Mic className="h-6 w-6" />
+                      )}
+                    </Button>
+                    <p className="text-sm text-muted-foreground">
+                      {isMuted ? "Tap to unmute" : "Tap to mute"}
+                    </p>
+                  </>
+                )}
+
+                {!canSpeak && (
+                  <p className="text-sm text-muted-foreground">
+                    Hanya host dan speaker yang bisa berbicara
+                  </p>
+                )}
               </div>
-            ))}
-          </CardContent>
-        </Card>
+
+              {/* Audio Visualizer Placeholder */}
+              <div className="h-24 bg-muted rounded-lg flex items-center justify-center">
+                <div className="flex gap-1 items-end h-16">
+                  {[...Array(20)].map((_, i) => (
+                    <div
+                      key={i}
+                      className={`w-2 bg-primary rounded-full transition-all ${
+                        !isMuted && canSpeak ? "animate-pulse" : "opacity-30"
+                      }`}
+                      style={{
+                        height: `${Math.random() * 100}%`,
+                        animationDelay: `${i * 0.1}s`,
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Participants */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Participants ({participants.length})
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {participants.map((participant) => {
+                  // ✅ user is guaranteed non-null at this point
+                  const isMe = participant.user_id === user.id
+                  const isSpeaker = participant.role === "speaker"
+                  const isParticipantHost = participant.role === "host"
+
+                  return (
+                    <div
+                      key={participant.user_id}
+                      className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted transition-colors"
+                    >
+                      <Avatar>
+                        <AvatarFallback>
+                          {isParticipantHost
+                            ? "H"
+                            : isSpeaker
+                            ? "S"
+                            : "L"}
+                        </AvatarFallback>
+                      </Avatar>
+
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate">
+                          {isMe
+                            ? "You"
+                            : participant.username ||
+                              `User ${participant.user_id.slice(0, 6)}`}
+                        </p>
+                        <Badge
+                          variant={
+                            isParticipantHost ? "default" : "secondary"
+                          }
+                          className="text-xs"
+                        >
+                          {participant.role}
+                        </Badge>
+                      </div>
+
+                      <div>
+                        {participant.role !== "listener" ? (
+                          <Volume2 className="h-4 w-4 text-green-500" />
+                        ) : (
+                          <Mic className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+
+                      {isHost && !isMe && participant.role === "listener" && (
+                        <Button size="sm" variant="outline">
+                          <UserPlus className="h-3 w-3" />
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   )

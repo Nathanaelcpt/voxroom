@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -12,9 +12,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { getAccessToken } from "@/lib/auth"
+import { AlertCircle, Mic } from "lucide-react"
+import { createRoom } from "@/lib/api/rooms"
+import type { CreateRoomRequest } from "@/app/types/room"
 
-type AudioDevice = {
+interface AudioDevice {
   deviceId: string
   label: string
 }
@@ -28,72 +30,43 @@ export default function GoLiveSetupPage() {
   const [permissionError, setPermissionError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Load audio devices
   useEffect(() => {
     async function loadDevices() {
       try {
+        // Request microphone permission
         await navigator.mediaDevices.getUserMedia({ audio: true })
 
+        // Get all audio input devices
         const allDevices = await navigator.mediaDevices.enumerateDevices()
-        const mics = allDevices
+        const audioInputs = allDevices
           .filter((d) => d.kind === "audioinput")
           .map((d) => ({
             deviceId: d.deviceId,
-            label: d.label || "Unknown Microphone",
+            label: d.label || `Microphone ${d.deviceId.slice(0, 5)}`,
           }))
 
-        setDevices(mics)
-        if (mics.length > 0) {
-          setSelectedMic(mics[0].deviceId)
+        setDevices(audioInputs)
+
+        // Auto-select first device
+        if (audioInputs.length > 0) {
+          setSelectedMic(audioInputs[0].deviceId)
         }
+
+        setPermissionError(null)
       } catch (err) {
-        console.error(err)
-        setPermissionError("Akses microphone ditolak")
+        console.error("Failed to get audio devices:", err)
+        setPermissionError(
+          "Akses microphone ditolak. Silakan izinkan akses microphone di browser."
+        )
       }
     }
 
     loadDevices()
   }, [])
 
-  // 🆕 Helper function dengan retry logic
-  async function fetchWithRetry(
-    url: string,
-    options: RequestInit,
-    retries = 3,
-    delay = 2000
-  ): Promise<Response> {
-    for (let i = 0; i < retries; i++) {
-      try {
-        const response = await fetch(url, options)
-        
-        // Jika sukses, return
-        if (response.ok) {
-          return response
-        }
-        
-        // Jika 503 (Service Unavailable) dan masih ada retry, tunggu dan coba lagi
-        if (response.status === 503 && i < retries - 1) {
-          console.log(`Server unavailable, retrying in ${delay}ms... (${i + 1}/${retries})`)
-          await new Promise(resolve => setTimeout(resolve, delay))
-          continue
-        }
-        
-        // Jika error lain atau retry habis, return response
-        return response
-      } catch (error) {
-        // Network error
-        if (i < retries - 1) {
-          console.log(`Network error, retrying in ${delay}ms... (${i + 1}/${retries})`)
-          await new Promise(resolve => setTimeout(resolve, delay))
-          continue
-        }
-        throw error
-      }
-    }
-    
-    throw new Error("Max retries reached")
-  }
-
-  async function startLive() {
+  async function handleGoLive() {
+    // Validation
     if (!title.trim()) {
       alert("Judul room wajib diisi")
       return
@@ -106,49 +79,22 @@ export default function GoLiveSetupPage() {
 
     setLoading(true)
 
-    const token = await getAccessToken()
-    if (!token) {
-      alert("Harus login")
-      setLoading(false)
-      return
-    }
-
     try {
-      // 🆕 Gunakan fetchWithRetry
-      const res = await fetchWithRetry(
-        process.env.NEXT_PUBLIC_API_URL + "/rooms",
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            title,
-          }),
-        },
-        3, // max 3 retries
-        2000 // delay 2 detik
-      )
+      const data: CreateRoomRequest = { title: title.trim() }
+      const response = await createRoom(data)
 
-      if (!res.ok) {
-        throw new Error("Gagal membuat room")
-      }
+      console.log("✅ Room created:", response.room_id)
+      console.log("🎤 Selected mic:", selectedMic)
 
-      const data = await res.json()
-
-      console.log("ROOM CREATED:", data.room_id)
-      console.log("Selected mic:", selectedMic)
-
-      router.push(`/room/${data.room_id}`)
+      // Navigate to room
+      router.push(`/room/${response.room_id}`)
     } catch (err) {
-      console.error(err)
-      // 🆕 Pesan error yang lebih informatif
-      if (err instanceof Error && err.message.includes("503")) {
-        alert("Server sedang maintenance. Silakan coba lagi dalam beberapa saat.")
-      } else {
-        alert("Terjadi kesalahan saat Go Live. Silakan coba lagi.")
-      }
+      console.error("Failed to create room:", err)
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Terjadi kesalahan saat membuat room"
+      )
     } finally {
       setLoading(false)
     }
@@ -158,61 +104,81 @@ export default function GoLiveSetupPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-6">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Setup Audio</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <Mic className="h-5 w-5" />
+            Setup Audio Streaming
+          </CardTitle>
         </CardHeader>
 
-        <CardContent className="space-y-4">
+        <CardContent className="space-y-6">
+          {/* Permission Error */}
           {permissionError && (
-            <p className="text-sm text-red-500">{permissionError}</p>
+            <div className="flex items-start gap-2 rounded-lg border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <p>{permissionError}</p>
+            </div>
           )}
 
-          {/* Judul Room */}
+          {/* Room Title */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">
-              Judul Room
-            </label>
+            <label className="text-sm font-medium">Judul Room</label>
             <Input
               placeholder="Contoh: Podcast Malam Jumat"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
+              disabled={loading}
+              maxLength={100}
             />
+            <p className="text-xs text-muted-foreground">
+              {title.length}/100 karakter
+            </p>
           </div>
 
-          {/* Microphone */}
+          {/* Microphone Selection */}
           <div className="space-y-2">
-            <label className="text-sm font-medium">
-              Microphone
-            </label>
-
+            <label className="text-sm font-medium">Microphone</label>
             <Select
               value={selectedMic}
               onValueChange={setSelectedMic}
-              disabled={devices.length === 0}
+              disabled={devices.length === 0 || loading}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Pilih microphone" />
               </SelectTrigger>
-
               <SelectContent>
                 {devices.map((mic) => (
-                  <SelectItem
-                    key={mic.deviceId}
-                    value={mic.deviceId}
-                  >
+                  <SelectItem key={mic.deviceId} value={mic.deviceId}>
                     {mic.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {devices.length === 0 && !permissionError && (
+              <p className="text-xs text-muted-foreground">
+                Tidak ada microphone terdeteksi
+              </p>
+            )}
           </div>
 
+          {/* Go Live Button */}
           <Button
             className="w-full"
-            disabled={loading}
-            onClick={startLive}
+            size="lg"
+            disabled={loading || !title.trim() || !selectedMic}
+            onClick={handleGoLive}
           >
-            {loading ? "Going Live..." : "Go Live"}
+            {loading ? "Creating Room..." : "Go Live 🎙️"}
           </Button>
+
+          {/* Info */}
+          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
+            <p className="font-medium mb-1">ℹ️ Info:</p>
+            <ul className="space-y-1 list-disc list-inside">
+              <li>Room akan otomatis live setelah dibuat</li>
+              <li>Hanya kamu (host) yang bisa mengakhiri room</li>
+              <li>Kamu bisa invite listener untuk jadi speaker</li>
+            </ul>
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -58,6 +58,8 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("📝 Creating room: %s by user: %s", req.Title, userID)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
@@ -91,11 +93,12 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		log.Println("❌ CreateRoom:", err)
+		log.Printf("❌ CreateRoom failed: %v", err)
 		writeJSONError(w, "failed to create room", http.StatusInternalServerError)
 		return
 	}
 
+	log.Printf("✅ Room created: %s", roomID)
 	writeJSON(w, CreateRoomResponse{RoomID: roomID})
 }
 
@@ -104,6 +107,8 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 ======================= */
 
 func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
+	log.Println("📋 Fetching active rooms")
+
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
@@ -117,11 +122,12 @@ func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN room_participants rp ON rp.room_id = r.id
 		WHERE r.is_live = true
 		GROUP BY r.id
-		ORDER BY r.id DESC
+		ORDER BY r.created_at DESC
+		LIMIT 50
 	`)
 	if err != nil {
-		log.Println("❌ GetActiveRooms:", err)
-		writeJSONError(w, "failed to fetch rooms", 500)
+		log.Printf("❌ GetActiveRooms query error: %v", err)
+		writeJSONError(w, "failed to fetch rooms", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -139,6 +145,7 @@ func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 		rooms = []Room{}
 	}
 
+	log.Printf("✅ Found %d active rooms", len(rooms))
 	writeJSON(w, rooms)
 }
 
@@ -147,11 +154,14 @@ func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 ======================= */
 
 func GetRoomDetails(w http.ResponseWriter, r *http.Request) {
+	// Extract roomID from path
 	roomID := strings.TrimPrefix(r.URL.Path, "/rooms/")
 	if roomID == "" || strings.Contains(roomID, "/") {
-		writeJSONError(w, "room id required", 400)
+		writeJSONError(w, "room id required", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("🔍 Fetching room details: %s", roomID)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
@@ -164,14 +174,16 @@ func GetRoomDetails(w http.ResponseWriter, r *http.Request) {
 	`, roomID).Scan(&room.ID, &room.Title, &room.IsLive)
 
 	if err != nil {
-		writeJSONError(w, "room not found", 404)
+		log.Printf("❌ Room not found: %s", roomID)
+		writeJSONError(w, "room not found", http.StatusNotFound)
 		return
 	}
 
+	// Get participants
 	rows, err := db.Pool.Query(ctx, `
 		SELECT user_id, role
 		FROM room_participants
-		WHERE room_id = $1
+		WHERE room_id = $1 AND left_at IS NULL
 	`, roomID)
 
 	var participants []Participant
@@ -185,8 +197,13 @@ func GetRoomDetails(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if participants == nil {
+		participants = []Participant{}
+	}
+
 	room.Listeners = len(participants)
 
+	log.Printf("✅ Room details: %s (%d participants)", room.Title, len(participants))
 	writeJSON(w, RoomDetail{
 		Room:         room,
 		Participants: participants,
@@ -200,52 +217,223 @@ func GetRoomDetails(w http.ResponseWriter, r *http.Request) {
 func JoinRoom(w http.ResponseWriter, r *http.Request) {
 	userID, ok := r.Context().Value(auth.UserIDKey).(string)
 	if !ok || userID == "" {
-		writeJSONError(w, "unauthorized", 401)
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	roomID := strings.TrimSuffix(
-		strings.TrimPrefix(r.URL.Path, "/rooms/"),
-		"/join",
-	)
+	// Extract roomID from path: /rooms/{id}/join
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/join")
 
-	if roomID == "" {
-		writeJSONError(w, "room id required", 400)
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
 		return
 	}
+
+	log.Printf("👋 User %s joining room %s", userID, roomID)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// Check if room exists and is live
 	var isLive bool
 	err := db.Pool.QueryRow(ctx,
 		`SELECT is_live FROM rooms WHERE id = $1`, roomID,
 	).Scan(&isLive)
 
 	if err != nil {
-		writeJSONError(w, "room not found", 404)
+		log.Printf("❌ Room not found: %s", roomID)
+		writeJSONError(w, "room not found", http.StatusNotFound)
 		return
 	}
 
 	if !isLive {
-		writeJSONError(w, "room is not live", 403)
+		writeJSONError(w, "room is not live", http.StatusForbidden)
 		return
 	}
 
+	// Add user as listener
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO room_participants (room_id, user_id, role)
 		VALUES ($1, $2, 'listener')
-		ON CONFLICT DO NOTHING
+		ON CONFLICT (room_id, user_id) DO NOTHING
 	`, roomID, userID)
 
 	if err != nil {
-		writeJSONError(w, "failed to join room", 500)
+		log.Printf("❌ Failed to join room: %v", err)
+		writeJSONError(w, "failed to join room", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ User %s joined room %s", userID, roomID)
+	writeJSON(w, map[string]string{
+		"status":  "joined",
+		"room_id": roomID,
+	})
+}
+
+/* =======================
+   END ROOM (HTTP Handler)
+======================= */
+
+func EndRoomHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract roomID from path: /rooms/{id}/end
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/end")
+
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("🔴 User %s ending room %s", userID, roomID)
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Verify user is host
+	var isHost bool
+	err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM room_participants 
+			WHERE room_id = $1 AND user_id = $2 AND role = 'host'
+		)
+	`, roomID, userID).Scan(&isHost)
+
+	if err != nil || !isHost {
+		writeJSONError(w, "only host can end room", http.StatusForbidden)
+		return
+	}
+
+	// End the room
+	if err := EndRoom(roomID); err != nil {
+		writeJSONError(w, "failed to end room", http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, map[string]string{
-		"status":  "joined",
+		"status":  "ended",
 		"room_id": roomID,
+	})
+}
+
+/* =======================
+   INVITE SPEAKER
+======================= */
+
+func InviteSpeaker(w http.ResponseWriter, r *http.Request) {
+	hostID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || hostID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract roomID from path: /rooms/{id}/invite-speaker
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/invite-speaker")
+
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		writeJSONError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// ❌ HAPUS BARIS INI (tidak terpakai):
+	// ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	// defer cancel()
+
+	log.Printf("👥 Host %s inviting user %s to be speaker in room %s", hostID, req.UserID, roomID)
+
+	// Verify requester is host
+	hostRole, _ := GetUserRoleInRoom(roomID, hostID)
+	if hostRole != RoleHost {
+		writeJSONError(w, "only host can invite speakers", http.StatusForbidden)
+		return
+	}
+
+	// Upgrade user to speaker
+	if err := SetUserRole(roomID, req.UserID, RoleSpeaker, hostID); err != nil {
+		writeJSONError(w, "failed to invite speaker", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ User %s promoted to speaker in room %s", req.UserID, roomID)
+
+	writeJSON(w, map[string]string{
+		"status":  "invited",
+		"user_id": req.UserID,
+		"role":    string(RoleSpeaker),
+	})
+}
+
+/* =======================
+   REMOVE SPEAKER
+======================= */
+
+func RemoveSpeaker(w http.ResponseWriter, r *http.Request) {
+	hostID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || hostID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract roomID from path: /rooms/{id}/remove-speaker
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/remove-speaker")
+
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.UserID == "" {
+		writeJSONError(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+
+	// ❌ HAPUS BARIS INI (tidak terpakai):
+	// ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	// defer cancel()
+
+	log.Printf("👥 Host %s removing speaker %s in room %s", hostID, req.UserID, roomID)
+
+	// Verify requester is host
+	hostRole, _ := GetUserRoleInRoom(roomID, hostID)
+	if hostRole != RoleHost {
+		writeJSONError(w, "only host can remove speakers", http.StatusForbidden)
+		return
+	}
+
+	// Downgrade to listener
+	if err := SetUserRole(roomID, req.UserID, RoleListener, ""); err != nil {
+		writeJSONError(w, "failed to remove speaker", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("✅ User %s demoted to listener in room %s", req.UserID, roomID)
+
+	writeJSON(w, map[string]string{
+		"status":  "removed",
+		"user_id": req.UserID,
+		"role":    string(RoleListener),
 	})
 }
 
