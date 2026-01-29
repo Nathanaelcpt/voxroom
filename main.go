@@ -65,10 +65,10 @@ func main() {
 	// Room operations (need custom routing because of path parameters)
 	mux.HandleFunc("/rooms/", handleRoomRoutes)
 
-	// WebSocket (protected)
-	mux.HandleFunc("/ws", withAuth(func(w http.ResponseWriter, r *http.Request) {
-		ws.ServeWS(hub, w, r)
-	}))
+	// WebSocket (NO AUTH MIDDLEWARE - handled inside ServeWS)
+	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+	ws.ServeWS(hub, w, r)
+})
 
 	// ======================
 	// CORS + START SERVER

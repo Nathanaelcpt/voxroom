@@ -32,11 +32,15 @@ export function useWebSocket({
       try {
         const token = await getAccessToken()
         if (!token) {
-          console.error("No token available for WebSocket")
+          console.error("❌ No token available for WebSocket")
           return
         }
 
-        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/ws?roomId=${roomId}`
+        // ✅ Send token as query parameter instead of header
+        const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/ws?roomId=${roomId}&token=${token}`
+        
+        console.log("🔌 Connecting to WebSocket:", wsUrl.replace(token, "***"))
+        
         const ws = new WebSocket(wsUrl)
 
         ws.addEventListener("open", () => {
@@ -94,12 +98,13 @@ export function useWebSocket({
   // Send message
   const send = useCallback((type: WSMessageType, payload?: any) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.warn("WebSocket not connected, cannot send message")
+      console.warn("⚠️ WebSocket not connected, cannot send message")
       return
     }
 
     const message: WSMessage = { type, payload }
     wsRef.current.send(JSON.stringify(message))
+    console.log("📤 Sent message:", message)
   }, [])
 
   return {

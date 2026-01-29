@@ -28,15 +28,25 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Get authenticated user ID
-	userID, ok := r.Context().Value(auth.UserIDKey).(string)
-	if !ok || userID == "" {
-		log.Println("❌ WebSocket rejected: unauthorized")
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	// 2. ✅ Get token from query parameter (WebSocket can't send headers)
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		log.Println("❌ WebSocket rejected: missing token")
+		http.Error(w, "missing token parameter", http.StatusUnauthorized)
 		return
 	}
 
-	// 3. Upgrade HTTP connection to WebSocket
+	// 3. ✅ Validate token
+	user, err := auth.ValidateToken(r.Context(), token)
+	if err != nil {
+		log.Printf("❌ WebSocket auth failed: %v", err)
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	userID := user.ID
+
+	// 4. Upgrade HTTP connection to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("❌ WebSocket upgrade failed: %v", err)
@@ -45,7 +55,7 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("🔌 WebSocket connection established: user=%s, room=%s", userID, roomID)
 
-	// 4. Create client
+	// 5. Create client
 	client := &Client{
 		Conn:   conn,
 		Send:   make(chan Message, 16),
@@ -54,10 +64,10 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 		// Role and CanSpeak will be set by Hub.Register
 	}
 
-	// 5. Register client to hub
+	// 6. Register client to hub
 	hub.Register <- client
 
-	// 6. Start goroutines for read/write
+	// 7. Start goroutines for read/write
 	go client.WritePump()
 	go client.ReadPump(hub)
 }
