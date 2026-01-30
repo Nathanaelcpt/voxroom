@@ -25,23 +25,65 @@ export default function RoomPage() {
   const [myRole, setMyRole] = useState<Role>("listener")
   const [isMuted, setIsMuted] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [roomLoaded, setRoomLoaded] = useState(false) // ✅ NEW: Track if room is loaded
+  const [roomLoaded, setRoomLoaded] = useState(false) // ✅ Flag untuk WebSocket
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
+
+  // ✅ STEP 1: Load room details FIRST (before WebSocket)
+  useEffect(() => {
+    if (!roomId || !user) {
+      if (!user) {
+        setLoading(false)
+      }
+      return
+    }
+
+    async function loadRoom() {
+      if (!roomId || !user) return
+
+      try {
+        console.log("📥 Loading room details BEFORE WebSocket...")
+        const data = await getRoomDetails(roomId!)
+        setRoom(data)
+        setParticipants(data.participants)
+
+        // ✅ Get role from database
+        const me = data.participants.find((p) => p.user_id === user.id)
+        if (me) {
+          setMyRole(me.role)
+          console.log("✅ Role from DB:", me.role)
+        } else {
+          console.warn("⚠️ User not in participants yet")
+        }
+
+        // ✅ CRITICAL: Set roomLoaded AFTER we have the data
+        setRoomLoaded(true)
+        console.log("✅ Room loaded, WebSocket can connect now")
+      } catch (err) {
+        console.error("Failed to load room:", err)
+        alert("Room tidak ditemukan")
+        router.push("/")
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadRoom()
+  }, [roomId, user, router])
 
   // WebSocket message handler
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       switch (message.type) {
         case "role_assigned":
-          // ✅ Only update if role from WS matches our role from DB
-          // This prevents overwriting correct role with wrong one
           if (message.payload?.role) {
-            console.log("📨 WS Role assigned:", message.payload.role, "| Current role:", myRole)
-            // Don't overwrite if we already have correct role from DB
-            if (myRole === "listener" || message.payload.role === myRole) {
+            console.log("📨 WS Role assigned:", message.payload.role, "| DB role:", myRole)
+            // ✅ Don't overwrite if we already have correct role from DB
+            if (myRole === "listener") {
               setMyRole(message.payload.role)
+            } else {
+              console.log("ℹ️ Keeping DB role:", myRole)
             }
           }
           break
@@ -80,56 +122,15 @@ export default function RoomPage() {
           console.log("📨 Unhandled message:", message.type)
       }
     },
-    [user, router, myRole] // ✅ Add myRole to dependencies
+    [user, router, myRole]
   )
-
-  // ✅ STEP 1: Load room details FIRST
-  useEffect(() => {
-    if (!roomId || !user) {
-      if (!user) {
-        setLoading(false)
-      }
-      return
-    }
-
-    async function loadRoom() {
-      if (!roomId || !user) return
-
-      try {
-        console.log("📥 Loading room details before WebSocket...")
-        const data = await getRoomDetails(roomId!)
-        setRoom(data)
-        setParticipants(data.participants)
-
-        // ✅ Get role from database
-        const me = data.participants.find((p) => p.user_id === user.id)
-        if (me) {
-          setMyRole(me.role)
-          console.log("✅ Role from DB:", me.role)
-        } else {
-          console.warn("⚠️ User not in participants yet")
-        }
-
-        // ✅ Signal that room is loaded, WebSocket can connect now
-        setRoomLoaded(true)
-      } catch (err) {
-        console.error("Failed to load room:", err)
-        alert("Room tidak ditemukan")
-        router.push("/")
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadRoom()
-  }, [roomId, user, router])
 
   // ✅ STEP 2: Connect WebSocket ONLY AFTER room is loaded
   const { isConnected, send } = useWebSocket({
-    roomId: roomLoaded ? (roomId || "") : "", // ✅ Empty string prevents connection
+    roomId: roomLoaded && roomId ? roomId : "", // ✅ Empty string prevents connection
     onMessage: handleWSMessage,
-    onOpen: () => console.log("✅ Connected to room"),
-    onClose: () => console.log("🔌 Disconnected from room"),
+    onOpen: () => console.log("✅ Connected to WebSocket"),
+    onClose: () => console.log("🔌 Disconnected from WebSocket"),
   })
 
   // Toggle mic
@@ -208,7 +209,7 @@ export default function RoomPage() {
                   {room.listeners} listening
                 </Badge>
                 <span>•</span>
-                <span>{isConnected ? "Connected" : "Connecting..."}</span>
+                <span>{isConnected ? "Connected" : roomLoaded ? "Connecting..." : "Loading..."}</span>
               </div>
             </div>
           </div>
