@@ -112,15 +112,16 @@ func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// ✅ Fix: Add DISTINCT and filter ended_at IS NULL
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
 			r.id,
 			r.title,
 			r.is_live,
-			COUNT(rp.user_id) FILTER (WHERE rp.left_at IS NULL) AS listeners
+			COUNT(DISTINCT rp.user_id) FILTER (WHERE rp.left_at IS NULL) AS listeners
 		FROM rooms r
 		LEFT JOIN room_participants rp ON rp.room_id = r.id
-		WHERE r.is_live = true
+		WHERE r.is_live = true AND r.ended_at IS NULL
 		GROUP BY r.id
 		ORDER BY r.created_at DESC
 		LIMIT 50
@@ -238,7 +239,7 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 	// Check if room exists and is live
 	var isLive bool
 	err := db.Pool.QueryRow(ctx,
-		`SELECT is_live FROM rooms WHERE id = $1`, roomID,
+		`SELECT is_live FROM rooms WHERE id = $1 AND ended_at IS NULL`, roomID,
 	).Scan(&isLive)
 
 	if err != nil {
@@ -252,11 +253,30 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add user as listener
+	// ✅ Check if user already in room
+	var existingRole string
+	err = db.Pool.QueryRow(ctx, `
+		SELECT role FROM room_participants 
+		WHERE room_id = $1 AND user_id = $2 AND left_at IS NULL
+	`, roomID, userID).Scan(&existingRole)
+
+	if err == nil {
+		// User already in room
+		log.Printf("ℹ️ User %s already in room %s as %s", userID, roomID, existingRole)
+		writeJSON(w, map[string]string{
+			"status":  "already_joined",
+			"room_id": roomID,
+			"role":    existingRole,
+		})
+		return
+	}
+
+	// ✅ Add user as listener with proper conflict handling
 	_, err = db.Pool.Exec(ctx, `
 		INSERT INTO room_participants (room_id, user_id, role)
 		VALUES ($1, $2, 'listener')
-		ON CONFLICT (room_id, user_id) DO NOTHING
+		ON CONFLICT (room_id, user_id) 
+		DO UPDATE SET left_at = NULL, role = EXCLUDED.role
 	`, roomID, userID)
 
 	if err != nil {
@@ -265,7 +285,7 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("✅ User %s joined room %s", userID, roomID)
+	log.Printf("✅ User %s joined room %s as listener", userID, roomID)
 	writeJSON(w, map[string]string{
 		"status":  "joined",
 		"room_id": roomID,
