@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -68,37 +69,87 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 	err := db.ExecuteWithRetry(ctx, 3, func(ctx context.Context) error {
 		tx, err := db.Pool.Begin(ctx)
 		if err != nil {
+			log.Printf("❌ Failed to begin transaction: %v", err)
 			return err
 		}
 		defer tx.Rollback(ctx)
 
+		// ✅ Step 1: Insert room
 		if err := tx.QueryRow(ctx, `
 			INSERT INTO rooms (title, host_id, is_live)
 			VALUES ($1, $2, true)
 			RETURNING id
 		`, req.Title, userID).Scan(&roomID); err != nil {
+			log.Printf("❌ Failed to insert room: %v", err)
 			return err
 		}
 
-		_, err = tx.Exec(ctx, `
+		log.Printf("✅ Room inserted to DB: roomID=%s", roomID)
+
+		// ✅ Step 2: Insert host participant with detailed logging
+		result, err := tx.Exec(ctx, `
 			INSERT INTO room_participants (room_id, user_id, role)
 			VALUES ($1, $2, 'host')
 		`, roomID, userID)
 
 		if err != nil {
+			log.Printf("❌ Failed to insert host participant: error=%v, room=%s, user=%s", err, roomID, userID)
 			return err
 		}
 
-		return tx.Commit(ctx)
+		rowsAffected := result.RowsAffected()
+		log.Printf("✅ Host participant INSERT executed: room=%s, user=%s, rows_affected=%d", roomID, userID, rowsAffected)
+
+		if rowsAffected == 0 {
+			log.Printf("⚠️ CRITICAL: Host participant INSERT returned 0 rows affected!")
+			return fmt.Errorf("host participant insert returned 0 rows")
+		}
+
+		// ✅ Step 3: Verify the insert
+		var verifyCount int
+		err = tx.QueryRow(ctx, `
+			SELECT COUNT(*) FROM room_participants
+			WHERE room_id = $1 AND user_id = $2
+		`, roomID, userID).Scan(&verifyCount)
+
+		if err != nil {
+			log.Printf("❌ Failed to verify participant insert: %v", err)
+			return err
+		}
+
+		log.Printf("✅ Verification query: count=%d for room=%s, user=%s", verifyCount, roomID, userID)
+
+		if verifyCount == 0 {
+			log.Printf("⚠️ CRITICAL: Verification failed - host not in database!")
+			return fmt.Errorf("host participant not found after insert")
+		}
+
+		// ✅ Step 4: Commit transaction
+		if err := tx.Commit(ctx); err != nil {
+			log.Printf("❌ Failed to commit transaction: %v", err)
+			return err
+		}
+
+		log.Printf("✅ Transaction committed successfully for room %s", roomID)
+		return nil
 	})
 
 	if err != nil {
-		log.Printf("❌ CreateRoom failed: %v", err)
+		log.Printf("❌ CreateRoom FAILED after retries: %v", err)
 		writeJSONError(w, "failed to create room", http.StatusInternalServerError)
 		return
 	}
 
-	log.Printf("✅ Room created: %s", roomID)
+	// ✅ Final verification outside transaction
+	var finalCount int
+	db.Pool.QueryRow(ctx, `
+		SELECT COUNT(*) FROM room_participants
+		WHERE room_id = $1 AND user_id = $2
+	`, roomID, userID).Scan(&finalCount)
+
+	log.Printf("✅ FINAL CHECK: Host in DB? count=%d, room=%s, user=%s", finalCount, roomID, userID)
+
+	log.Printf("✅ Room created successfully: roomID=%s", roomID)
 	writeJSON(w, CreateRoomResponse{RoomID: roomID})
 }
 
