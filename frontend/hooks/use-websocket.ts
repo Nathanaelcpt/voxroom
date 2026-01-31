@@ -62,15 +62,20 @@ export function useWebSocket({
           if (!mounted) return
           console.log("✅ WebSocket connected")
           setIsConnected(true)
-          onOpenRef.current?.()   // ✅ call via ref
+          onOpenRef.current?.()
         })
 
         ws.addEventListener("message", (event) => {
           if (!mounted) return
           try {
             const message: WSMessage = JSON.parse(event.data)
-            console.log("📨 WS message:", message)
-            onMessageRef.current?.(message)  // ✅ call via ref
+            
+            // Don't log audio messages (too verbose)
+            if (message.type !== "audio") {
+              console.log("📨 WS message:", message)
+            }
+            
+            onMessageRef.current?.(message)
           } catch (err) {
             console.error("Failed to parse WS message:", err)
           }
@@ -80,13 +85,13 @@ export function useWebSocket({
           if (!mounted) return
           console.log("🔌 WebSocket disconnected")
           setIsConnected(false)
-          onCloseRef.current?.()  // ✅ call via ref
+          onCloseRef.current?.()
         })
 
         ws.addEventListener("error", (error) => {
           if (!mounted) return
           console.error("❌ WebSocket error:", error)
-          onErrorRef.current?.(error)  // ✅ call via ref
+          onErrorRef.current?.(error)
         })
 
         wsRef.current = ws
@@ -104,8 +109,9 @@ export function useWebSocket({
         wsRef.current = null
       }
     }
-  }, [roomId])  // ✅ ONLY roomId — no more callback deps
+  }, [roomId])
 
+  // Send text message
   const send = useCallback((type: WSMessageType, payload?: any) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       console.warn("⚠️ WebSocket not connected, cannot send message")
@@ -113,8 +119,35 @@ export function useWebSocket({
     }
     const message: WSMessage = { type, payload }
     wsRef.current.send(JSON.stringify(message))
-    console.log("📤 Sent message:", message)
+    
+    // Don't log audio messages
+    if (type !== "audio") {
+      console.log("📤 Sent message:", message)
+    }
   }, [])
 
-  return { isConnected, send }
+  // ✅ Send audio chunk (raw binary)
+  const sendAudioChunk = useCallback((audioData: ArrayBuffer) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return
+    }
+
+    // Convert ArrayBuffer to base64
+    const bytes = new Uint8Array(audioData)
+    const binary = bytes.reduce((acc, byte) => acc + String.fromCharCode(byte), '')
+    const base64 = btoa(binary)
+
+    const message: WSMessage = {
+      type: "audio",
+      payload: { chunk: base64 }
+    }
+
+    wsRef.current.send(JSON.stringify(message))
+  }, [])
+
+  return {
+    isConnected,
+    send,
+    sendAudioChunk,
+  }
 }

@@ -10,6 +10,7 @@ import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus } from "lucide-rea
 import { useUser } from "@/hooks/use-user"
 import { getRoomDetails, endRoom } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
+import { useAudioStream } from "@/hooks/use-audio-stream"
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 
@@ -26,6 +27,7 @@ export default function RoomPage() {
   const [isMuted, setIsMuted] = useState(true)
   const [loading, setLoading] = useState(true)
   const [roomLoaded, setRoomLoaded] = useState(false)
+  const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set())
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
@@ -48,7 +50,6 @@ export default function RoomPage() {
         setRoom(data)
         setParticipants(data.participants)
 
-        // Get role from database response
         const me = data.participants.find((p) => p.user_id === user.id)
         if (me) {
           setMyRole(me.role)
@@ -71,17 +72,12 @@ export default function RoomPage() {
     loadRoom()
   }, [roomId, user, router])
 
-  // ✅ FIX 1: Removed myRole from deps.
-  // role_assigned now always trusts backend (source of truth).
-  // role_updated handles mid-session role changes separately.
+  // WebSocket message handler
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       switch (message.type) {
         case "role_assigned":
           if (message.payload?.role) {
-            // ✅ FIX 2: Always trust backend role.
-            // Backend confirmed it returns correct role from DB.
-            // No need to guard with myRole check.
             console.log("📨 WS role_assigned:", message.payload.role)
             setMyRole(message.payload.role)
           }
@@ -112,6 +108,34 @@ export default function RoomPage() {
           }
           break
 
+        case "audio":
+          // ✅ Received audio chunk from another user
+          if (message.from && message.payload?.chunk) {
+            // Decode base64 to ArrayBuffer
+            const binary = atob(message.payload.chunk)
+            const bytes = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) {
+              bytes[i] = binary.charCodeAt(i)
+            }
+            playAudioChunk(message.from, bytes.buffer)
+          }
+          break
+
+        case "speaking":
+          // ✅ Speaking indicator
+          if (message.payload?.user_id !== undefined) {
+            setSpeakingUsers((prev) => {
+              const next = new Set(prev)
+              if (message.payload.is_speaking) {
+                next.add(message.payload.user_id)
+              } else {
+                next.delete(message.payload.user_id)
+              }
+              return next
+            })
+          }
+          break
+
         case "room_ended":
           alert("Room telah ditutup oleh host")
           router.push("/")
@@ -121,16 +145,22 @@ export default function RoomPage() {
           console.log("📨 Unhandled message:", message.type)
       }
     },
-    [user, router] // ✅ Only user and router — both are stable refs
+    [user, router]
   )
 
-  // ✅ FIX 3: Removed inline onOpen/onClose.
-  // use-websocket.ts already uses useRef for callbacks,
-  // so these are safe even as inline functions.
-  // But removing them keeps this cleaner.
-  const { isConnected, send } = useWebSocket({
+  // STEP 2: Connect WebSocket
+  const { isConnected, send, sendAudioChunk } = useWebSocket({
     roomId: roomLoaded && roomId ? roomId : "",
     onMessage: handleWSMessage,
+  })
+
+  // STEP 3: Audio streaming
+  const { micPermission, isCapturing, playAudioChunk } = useAudioStream({
+    isHost,
+    canSpeak,
+    isMuted,
+    isConnected,
+    sendAudioChunk,
   })
 
   // Toggle mic
@@ -140,6 +170,7 @@ export default function RoomPage() {
     const newMutedState = !isMuted
     setIsMuted(newMutedState)
 
+    // Notify other users via WebSocket
     send(newMutedState ? "mic_off" : "mic_on")
     console.log(newMutedState ? "🔇 Muted" : "🎤 Unmuted")
   }
@@ -210,6 +241,12 @@ export default function RoomPage() {
                 </Badge>
                 <span>•</span>
                 <span>{isConnected ? "Connected" : roomLoaded ? "Connecting..." : "Loading..."}</span>
+                {canSpeak && isCapturing && (
+                  <>
+                    <span>•</span>
+                    <span className="text-green-600">🎤 Mic active</span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -238,7 +275,7 @@ export default function RoomPage() {
                 <div className="relative">
                   <div
                     className={`absolute inset-0 rounded-full ${
-                      !isMuted && canSpeak ? "bg-primary/20 animate-ping" : ""
+                      !isMuted && canSpeak && isCapturing ? "bg-primary/20 animate-ping" : ""
                     }`}
                   />
                   <Avatar className="h-32 w-32 border-4 border-primary relative">
@@ -263,11 +300,18 @@ export default function RoomPage() {
 
                 {canSpeak && (
                   <>
+                    {micPermission === "denied" && (
+                      <p className="text-sm text-destructive">
+                        ❌ Microphone access denied
+                      </p>
+                    )}
+                    
                     <Button
                       size="lg"
                       variant={isMuted ? "destructive" : "default"}
                       className="rounded-full h-16 w-16 p-0"
                       onClick={handleToggleMic}
+                      disabled={!isConnected}
                     >
                       {isMuted ? (
                         <MicOff className="h-6 w-6" />
@@ -294,7 +338,7 @@ export default function RoomPage() {
                     <div
                       key={i}
                       className={`w-2 bg-primary rounded-full transition-all ${
-                        !isMuted && canSpeak ? "animate-pulse" : "opacity-30"
+                        !isMuted && canSpeak && isCapturing ? "animate-pulse" : "opacity-30"
                       }`}
                       style={{
                         height: `${Math.random() * 100}%`,
@@ -321,6 +365,7 @@ export default function RoomPage() {
                   const isMe = participant.user_id === user.id
                   const isSpeaker = participant.role === "speaker"
                   const isParticipantHost = participant.role === "host"
+                  const isSpeaking = speakingUsers.has(participant.user_id)
 
                   return (
                     <div
@@ -356,7 +401,7 @@ export default function RoomPage() {
 
                       <div>
                         {participant.role !== "listener" ? (
-                          <Volume2 className="h-4 w-4 text-green-500" />
+                          <Volume2 className={`h-4 w-4 ${isSpeaking ? "text-green-500 animate-pulse" : "text-muted-foreground"}`} />
                         ) : (
                           <Mic className="h-4 w-4 text-muted-foreground" />
                         )}

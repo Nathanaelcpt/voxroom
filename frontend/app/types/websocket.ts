@@ -1,6 +1,4 @@
-// types/websocket.ts
-
-import type { Role } from "./room.ts"
+// app/types/websocket.ts
 
 export type WSMessageType =
   | "role_assigned"
@@ -9,10 +7,8 @@ export type WSMessageType =
   | "room_ended"
   | "mic_on"
   | "mic_off"
-  | "audio"
-  | "speaking"
-  | "user_joined"
-  | "user_left"
+  | "audio"        // ✅ Audio chunk data
+  | "speaking"     // ✅ Speaking indicator
 
 export interface WSMessage {
   type: WSMessageType
@@ -21,17 +17,27 @@ export interface WSMessage {
   payload?: any
 }
 
+// Specific message payloads for type safety
 export interface RoleAssignedPayload {
-  role: Role
+  role: "host" | "speaker" | "listener"
   can_speak: boolean
 }
 
 export interface RoleUpdatedPayload {
   user_id: string
-  role: Role
-  can_speak: boolean
+  role: "host" | "speaker" | "listener"
 }
 
 export interface ListenerCountPayload {
   count: number
+}
+
+export interface AudioPayload {
+  user_id: string
+  chunk: string  // Base64 encoded audio data
+}
+
+export interface SpeakingPayload {
+  user_id: string
+  is_speaking: boolean
 }

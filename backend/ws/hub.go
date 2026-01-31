@@ -4,6 +4,7 @@ import (
 	"log"
 
 	"voxroom/backend/room"
+	"voxroom/backend/webrtc"
 )
 
 // Hub maintains active clients and broadcasts messages to them
@@ -15,15 +16,19 @@ type Hub struct {
 	Register   chan *Client
 	Unregister chan *Client
 	Broadcast  chan Message
+
+	// ✅ Audio handler for WebRTC streaming
+	AudioHandler *webrtc.AudioHandler
 }
 
 // NewHub creates a new Hub instance
 func NewHub() *Hub {
 	return &Hub{
-		Rooms:      make(map[string]map[*Client]bool),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Broadcast:  make(chan Message),
+		Rooms:        make(map[string]map[*Client]bool),
+		Register:     make(chan *Client),
+		Unregister:   make(chan *Client),
+		Broadcast:    make(chan Message),
+		AudioHandler: webrtc.NewAudioHandler(), // ✅ Initialize audio handler
 	}
 }
 
@@ -88,7 +93,6 @@ func (h *Hub) handleUnregister(c *Client) {
 	// 2. Close send channel
 	select {
 	case <-c.Send:
-		// Already closed
 	default:
 		close(c.Send)
 	}
@@ -96,16 +100,13 @@ func (h *Hub) handleUnregister(c *Client) {
 	log.Printf("🔌 Client unregistered: user=%s, room=%s, role=%s",
 		c.UserID, c.RoomID, c.Role)
 
-	// ✅ FIX: Room only ends via explicit POST /rooms/{id}/end (End Room button).
-	// WebSocket disconnect does NOT end the room.
-	// This matches YouTube Live behavior — stream stays live even if
-	// the connection drops momentarily (e.g. React StrictMode remount,
-	// network blip, tab switch). Host reconnects automatically.
+	// ✅ 3. Stop audio stream if user was streaming
+	h.AudioHandler.HandleUserLeft(c.UserID)
 
-	// 3. Broadcast updated listener count
+	// 4. Broadcast updated listener count
 	h.broadcastListenerCount(c.RoomID)
 
-	// 4. Clean up empty room from hub memory only (not from DB)
+	// 5. Clean up empty room from hub memory only (not from DB)
 	if len(roomClients) == 0 {
 		delete(h.Rooms, c.RoomID)
 		log.Printf("🧹 Room %s cleaned up from hub (no active WebSocket clients)", c.RoomID)
@@ -119,6 +120,20 @@ func (h *Hub) handleBroadcast(msg Message) {
 		return
 	}
 
+	// ✅ Handle special message types with switch
+	switch msg.Type {
+	case MsgTypeAudio:
+		h.handleAudioBroadcast(msg, roomClients)
+		return
+
+	case MsgTypeMicOn:
+		h.AudioHandler.HandleMicOn(msg.From, msg.RoomID)
+
+	case MsgTypeMicOff:
+		h.AudioHandler.HandleMicOff(msg.From, msg.RoomID)
+	}
+
+	// Regular message broadcast
 	for client := range roomClients {
 		// Don't send message back to sender
 		if client.UserID == msg.From {
@@ -143,18 +158,60 @@ func (h *Hub) handleBroadcast(msg Message) {
 	}
 }
 
+// ✅ handleAudioBroadcast broadcasts audio to all eligible clients
+func (h *Hub) handleAudioBroadcast(msg Message, roomClients map[*Client]bool) {
+	// Process audio chunk
+	if payload, ok := msg.Payload.(map[string]interface{}); ok {
+		if chunk, ok := payload["chunk"].(string); ok {
+			// Validate and log audio chunk
+			if err := h.AudioHandler.HandleAudioChunk(msg.From, msg.RoomID, chunk); err != nil {
+				// Error logged in handler
+				return
+			}
+
+			// Broadcast to all clients who should receive audio
+			broadcastCount := 0
+			for client := range roomClients {
+				// Don't send back to sender
+				if client.UserID == msg.From {
+					continue
+				}
+
+				// ✅ All users can receive audio from speakers/host
+				// Permission check happens in shouldReceiveMessage
+				if h.shouldReceiveMessage(client, msg) {
+					select {
+					case client.Send <- msg:
+						broadcastCount++
+					default:
+						// Skip if channel full (audio is real-time, don't block)
+					}
+				}
+			}
+
+			// Periodic logging (every 100 chunks to avoid spam)
+			// You can remove this or adjust the frequency
+			// if broadcastCount > 0 && msg.From != "" {
+			// 	log.Printf("🔊 Audio broadcast: from=%s, to=%d listeners", msg.From[:8], broadcastCount)
+			// }
+		}
+	}
+}
+
 // shouldReceiveMessage checks if a client should receive a message based on permissions
 func (h *Hub) shouldReceiveMessage(c *Client, msg Message) bool {
-	// Audio messages only for clients who can speak
-	audioMessages := map[string]bool{
-		MsgTypeAudio:    true,
-		MsgTypeMicOn:    true,
-		MsgTypeMicOff:   true,
-		MsgTypeSpeaking: true,
+	// ✅ Audio messages: everyone can receive audio from host/speakers
+	if msg.Type == MsgTypeAudio {
+		return true // Sender already filtered out in handleAudioBroadcast
 	}
 
-	if audioMessages[msg.Type] {
-		// Listeners don't receive audio messages
+	// Mic control messages only for speakers
+	micMessages := map[string]bool{
+		MsgTypeMicOn:  true,
+		MsgTypeMicOff: true,
+	}
+
+	if micMessages[msg.Type] {
 		return c.CanSpeak
 	}
 
@@ -162,7 +219,7 @@ func (h *Hub) shouldReceiveMessage(c *Client, msg Message) bool {
 	return true
 }
 
-// endRoom closes a room and notifies all participants.
+// EndRoom closes a room and notifies all participants.
 // Called only from EndRoomHandler via explicit POST /rooms/{id}/end.
 func (h *Hub) EndRoom(roomID string) {
 	roomClients, exists := h.Rooms[roomID]
@@ -181,6 +238,9 @@ func (h *Hub) EndRoom(roomID string) {
 		default:
 		}
 		close(client.Send)
+		
+		// ✅ Stop audio streams
+		h.AudioHandler.HandleUserLeft(client.UserID)
 	}
 
 	// 2. Remove room from hub
