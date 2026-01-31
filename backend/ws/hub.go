@@ -55,7 +55,7 @@ func (h *Hub) handleRegister(c *Client) {
 
 	// 3. Get role from database
 	role, canSpeak := room.GetUserRoleInRoom(c.RoomID, c.UserID)
-	c.Role = string(role)  // ✅ Convert to string
+	c.Role = string(role)
 	c.CanSpeak = canSpeak
 
 	log.Printf("✅ Client registered: user=%s, room=%s, role=%s, can_speak=%v",
@@ -84,8 +84,8 @@ func (h *Hub) handleUnregister(c *Client) {
 
 	// 1. Remove client from room
 	delete(roomClients, c)
-	
-	// 2. Close send channel (safe to call multiple times)
+
+	// 2. Close send channel
 	select {
 	case <-c.Send:
 		// Already closed
@@ -96,20 +96,19 @@ func (h *Hub) handleUnregister(c *Client) {
 	log.Printf("🔌 Client unregistered: user=%s, room=%s, role=%s",
 		c.UserID, c.RoomID, c.Role)
 
-	// 3. If host left, end the entire room
-	if c.Role == "host" {
-		log.Printf("🔴 Host left room %s - ending room for all participants", c.RoomID)
-		h.endRoom(c.RoomID, roomClients)
-		return
-	}
+	// ✅ FIX: Room only ends via explicit POST /rooms/{id}/end (End Room button).
+	// WebSocket disconnect does NOT end the room.
+	// This matches YouTube Live behavior — stream stays live even if
+	// the connection drops momentarily (e.g. React StrictMode remount,
+	// network blip, tab switch). Host reconnects automatically.
 
-	// 4. Broadcast updated listener count
+	// 3. Broadcast updated listener count
 	h.broadcastListenerCount(c.RoomID)
 
-	// 5. Clean up empty room
+	// 4. Clean up empty room from hub memory only (not from DB)
 	if len(roomClients) == 0 {
 		delete(h.Rooms, c.RoomID)
-		log.Printf("🧹 Room %s cleaned up (no clients remaining)", c.RoomID)
+		log.Printf("🧹 Room %s cleaned up from hub (no active WebSocket clients)", c.RoomID)
 	}
 }
 
@@ -163,13 +162,23 @@ func (h *Hub) shouldReceiveMessage(c *Client, msg Message) bool {
 	return true
 }
 
-// endRoom closes a room and notifies all participants
-func (h *Hub) endRoom(roomID string, clients map[*Client]bool) {
+// endRoom closes a room and notifies all participants.
+// Called only from EndRoomHandler via explicit POST /rooms/{id}/end.
+func (h *Hub) EndRoom(roomID string) {
+	roomClients, exists := h.Rooms[roomID]
+	if !exists {
+		log.Printf("ℹ️ EndRoom: no active WebSocket clients in room %s", roomID)
+		return
+	}
+
 	// 1. Notify all clients that room ended
-	for client := range clients {
-		client.Send <- Message{
+	for client := range roomClients {
+		select {
+		case client.Send <- Message{
 			Type:   MsgTypeRoomEnded,
 			RoomID: roomID,
+		}:
+		default:
 		}
 		close(client.Send)
 	}
@@ -177,14 +186,7 @@ func (h *Hub) endRoom(roomID string, clients map[*Client]bool) {
 	// 2. Remove room from hub
 	delete(h.Rooms, roomID)
 
-	// 3. Update database
-	go func() {
-		if err := room.EndRoom(roomID); err != nil {
-			log.Printf("❌ Failed to end room %s in database: %v", roomID, err)
-		}
-	}()
-
-	log.Printf("✅ Room %s ended successfully", roomID)
+	log.Printf("✅ Hub: broadcasted room_ended to all clients in room %s", roomID)
 }
 
 // broadcastListenerCount sends updated listener count to all clients in a room
