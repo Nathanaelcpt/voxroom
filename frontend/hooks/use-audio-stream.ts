@@ -8,7 +8,7 @@ interface UseAudioStreamOptions {
   isMuted: boolean
   isConnected: boolean
   sendAudioChunk: (chunk: ArrayBuffer) => void
-  onAudioReceived?: (userId: string, audioData: ArrayBuffer) => void
+  playbackVolume?: number // 0 to 2 (1 = normal, 2 = 200%)
 }
 
 export function useAudioStream({
@@ -17,7 +17,7 @@ export function useAudioStream({
   isMuted,
   isConnected,
   sendAudioChunk,
-  onAudioReceived,
+  playbackVolume = 1.5, // ✅ Default 150% volume boost
 }: UseAudioStreamOptions) {
   const [micPermission, setMicPermission] = useState<"granted" | "denied" | "prompt">("prompt")
   const [isCapturing, setIsCapturing] = useState(false)
@@ -36,6 +36,7 @@ export function useAudioStream({
 
   // Audio playback refs (for listeners)
   const playbackContextRef = useRef<AudioContext | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
 
   // Start capturing audio (for host/speaker)
   const startCapture = useCallback(async () => {
@@ -69,8 +70,7 @@ export function useAudioStream({
       processorRef.current = processor
 
       processor.onaudioprocess = (e) => {
-        // ✅ FIX: Only check connection, not mute state
-        // Mute is UI-only — backend controls via mic_on/mic_off
+        // ✅ Only check connection, not mute state
         if (!isConnected) return
 
         // ✅ Check mute via ref to get current value
@@ -126,13 +126,19 @@ export function useAudioStream({
     console.log("🔇 Audio capture stopped")
   }, [])
 
-  // Play received audio (for listeners)
+  // ✅ Play received audio with volume boost (for listeners)
   const playAudioChunk = useCallback(async (userId: string, audioData: ArrayBuffer) => {
     if (!playbackContextRef.current) {
       playbackContextRef.current = new AudioContext({ sampleRate: 48000 })
+      
+      // ✅ Create gain node for volume control
+      gainNodeRef.current = playbackContextRef.current.createGain()
+      gainNodeRef.current.gain.value = playbackVolume
+      gainNodeRef.current.connect(playbackContextRef.current.destination)
     }
 
     const context = playbackContextRef.current
+    const gainNode = gainNodeRef.current!
 
     try {
       // Convert Int16Array back to Float32Array
@@ -147,10 +153,10 @@ export function useAudioStream({
       const audioBuffer = context.createBuffer(1, floatData.length, 48000)
       audioBuffer.getChannelData(0).set(floatData)
 
-      // Create buffer source and play
+      // Create buffer source and play through gain node
       const source = context.createBufferSource()
       source.buffer = audioBuffer
-      source.connect(context.destination)
+      source.connect(gainNode) // ✅ Connect to gain node instead of destination
       source.start()
 
       // Auto-cleanup after playback
@@ -160,10 +166,17 @@ export function useAudioStream({
     } catch (err) {
       console.error("❌ Failed to play audio chunk:", err)
     }
+  }, [playbackVolume])
+
+  // ✅ Update playback volume dynamically
+  const setPlaybackVolume = useCallback((volume: number) => {
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = volume
+      console.log(`🔊 Playback volume: ${Math.round(volume * 100)}%`)
+    }
   }, [])
 
   // ✅ Always keep mic active if canSpeak (for audio meter to work)
-  // Only control transmission via isMuted check in processor
   useEffect(() => {
     if (!canSpeak) {
       stopCapture()
@@ -185,11 +198,11 @@ export function useAudioStream({
     }
   }, [stopCapture])
 
-  // ✅ Export media stream for audio meter
   return {
     micPermission,
     isCapturing,
     playAudioChunk,
+    setPlaybackVolume,
     mediaStream: mediaStreamRef.current,
   }
 }

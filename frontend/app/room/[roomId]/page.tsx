@@ -4,15 +4,17 @@ import { useParams, useRouter } from "next/navigation"
 import { useEffect, useState, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { AudioMeter } from "@/components/audio-meter"
 import { AudioDeviceSelector } from "@/components/audio-device-selector"
+import { VolumeControl } from "@/components/volume-control"
+import { UserAvatar, getUserDisplayName } from "@/components/user-avatar"
 import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus, Settings } from "lucide-react"
 import { useUser } from "@/hooks/use-user"
-import { getRoomDetails, endRoom } from "@/lib/api/rooms"
+import { getRoomDetails, endRoom, inviteSpeaker } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
+import { getSupabase } from "@/lib/supabase"
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 
@@ -31,11 +33,12 @@ export default function RoomPage() {
   const [roomLoaded, setRoomLoaded] = useState(false)
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set())
   const [showSettings, setShowSettings] = useState(false)
+  const [playbackVolume, setPlaybackVolume] = useState(1.5) // 150% default
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
 
-  // STEP 1: Load room details FIRST (before WebSocket)
+  // STEP 1: Load room details
   useEffect(() => {
     if (!roomId || !user) {
       if (!user) {
@@ -48,21 +51,38 @@ export default function RoomPage() {
       if (!roomId || !user) return
 
       try {
-        console.log("📥 Loading room details BEFORE WebSocket...")
+        console.log("📥 Loading room details...")
         const data = await getRoomDetails(roomId!)
         setRoom(data)
-        setParticipants(data.participants)
 
-        const me = data.participants.find((p) => p.user_id === user.id)
+        // ✅ Enrich participants with user profiles from Supabase
+        const supabase = getSupabase()
+        const enrichedParticipants = await Promise.all(
+          data.participants.map(async (p) => {
+            // Try to get user profile from Supabase
+            const { data: profile } = await supabase.auth.admin.getUserById(p.user_id)
+            
+            return {
+              ...p,
+              email: profile?.user?.email,
+              full_name: profile?.user?.user_metadata?.full_name,
+              avatar_url: profile?.user?.user_metadata?.avatar_url,
+              username: profile?.user?.user_metadata?.username || 
+                        profile?.user?.email?.split("@")[0],
+            }
+          })
+        )
+
+        setParticipants(enrichedParticipants)
+
+        const me = enrichedParticipants.find((p) => p.user_id === user.id)
         if (me) {
           setMyRole(me.role)
           console.log("✅ Role from DB:", me.role)
-        } else {
-          console.warn("⚠️ User not in participants yet")
         }
 
         setRoomLoaded(true)
-        console.log("✅ Room loaded, WebSocket can connect now")
+        console.log("✅ Room loaded")
       } catch (err) {
         console.error("Failed to load room:", err)
         alert("Room tidak ditemukan")
@@ -81,7 +101,6 @@ export default function RoomPage() {
       switch (message.type) {
         case "role_assigned":
           if (message.payload?.role) {
-            console.log("📨 WS role_assigned:", message.payload.role)
             setMyRole(message.payload.role)
           }
           break
@@ -112,9 +131,7 @@ export default function RoomPage() {
           break
 
         case "audio":
-          // ✅ Received audio chunk from another user
           if (message.from && message.payload?.chunk) {
-            // Decode base64 to ArrayBuffer
             const binary = atob(message.payload.chunk)
             const bytes = new Uint8Array(binary.length)
             for (let i = 0; i < binary.length; i++) {
@@ -125,7 +142,6 @@ export default function RoomPage() {
           break
 
         case "speaking":
-          // ✅ Speaking indicator
           if (message.payload?.user_id !== undefined) {
             setSpeakingUsers((prev) => {
               const next = new Set(prev)
@@ -143,9 +159,6 @@ export default function RoomPage() {
           alert("Room telah ditutup oleh host")
           router.push("/")
           break
-
-        default:
-          console.log("📨 Unhandled message:", message.type)
       }
     },
     [user, router]
@@ -157,71 +170,72 @@ export default function RoomPage() {
     onMessage: handleWSMessage,
   })
 
-  // STEP 3: Audio streaming
-  const { micPermission, isCapturing, playAudioChunk, mediaStream } = useAudioStream({
+  // STEP 3: Audio streaming with volume control
+  const { micPermission, isCapturing, playAudioChunk, setPlaybackVolume: updatePlaybackVolume, mediaStream } = useAudioStream({
     isHost,
     canSpeak,
     isMuted,
     isConnected,
     sendAudioChunk,
+    playbackVolume,
   })
+
+  // Update volume
+  const handleVolumeChange = (volume: number) => {
+    setPlaybackVolume(volume)
+    updatePlaybackVolume(volume)
+  }
 
   // Toggle mic
   function handleToggleMic() {
     if (!canSpeak) return
-
     const newMutedState = !isMuted
     setIsMuted(newMutedState)
-
-    // Notify other users via WebSocket
     send(newMutedState ? "mic_off" : "mic_on")
-    console.log(newMutedState ? "🔇 Muted" : "🎤 Unmuted")
   }
 
-  // Leave room
+  // Invite speaker
+  async function handleInviteSpeaker(userId: string) {
+    if (!isHost || !roomId) return
+
+    try {
+      await inviteSpeaker(roomId, userId)
+      console.log("✅ Invited speaker:", userId)
+      // Refresh participants
+      const data = await getRoomDetails(roomId)
+      setParticipants(data.participants)
+    } catch (err) {
+      console.error("Failed to invite speaker:", err)
+      alert("Gagal invite speaker")
+    }
+  }
+
+  // Leave/End room
   async function handleLeaveRoom() {
     router.push("/")
   }
 
-  // End room (host only)
   async function handleEndRoom() {
     if (!isHost || !roomId) return
-
-    const confirmed = confirm(
-      "Yakin ingin mengakhiri room? Semua participant akan keluar."
-    )
-
-    if (!confirmed) return
+    if (!confirm("Yakin ingin mengakhiri room?")) return
 
     try {
       await endRoom(roomId!)
       router.push("/")
     } catch (err) {
       console.error("Failed to end room:", err)
-      alert("Gagal mengakhiri room")
     }
   }
 
-  if (!roomId) {
-    return null
-  }
-
-  if (!user || loading) {
+  if (!roomId || !user || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-          <p className="text-sm text-muted-foreground">
-            {!user ? "Please login..." : "Loading room..."}
-          </p>
-        </div>
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
     )
   }
 
-  if (!room) {
-    return null
-  }
+  if (!room) return null
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -243,27 +257,15 @@ export default function RoomPage() {
                   {room.listeners} listening
                 </Badge>
                 <span>•</span>
-                <span>{isConnected ? "Connected" : roomLoaded ? "Connecting..." : "Loading..."}</span>
-                {canSpeak && isCapturing && (
-                  <>
-                    <span>•</span>
-                    <span className="text-green-600">🎤 Mic active</span>
-                  </>
-                )}
+                <span>{isConnected ? "Connected" : "Connecting..."}</span>
               </div>
             </div>
           </div>
 
           <div className="flex gap-2">
-            {/* Settings Button */}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setShowSettings(!showSettings)}
-            >
+            <Button variant="outline" size="icon" onClick={() => setShowSettings(!showSettings)}>
               <Settings className="h-4 w-4" />
             </Button>
-
             {isHost && (
               <Button variant="destructive" onClick={handleEndRoom}>
                 End Room
@@ -284,40 +286,17 @@ export default function RoomPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-col items-center justify-center py-12 space-y-6">
-                <div className="relative">
-                  <div
-                    className={`absolute inset-0 rounded-full ${
-                      !isMuted && canSpeak && isCapturing ? "bg-primary/20 animate-ping" : ""
-                    }`}
-                  />
-                  <Avatar className="h-32 w-32 border-4 border-primary relative">
-                    <AvatarFallback className="text-4xl">
-                      {isHost ? "🎙️" : canSpeak ? "🗣️" : "👤"}
-                    </AvatarFallback>
-                  </Avatar>
-                </div>
+                <UserAvatar user={user} size="lg" className="h-32 w-32 border-4 border-primary text-4xl" />
 
                 <div className="text-center">
                   <p className="text-lg font-semibold">
-                    {isHost
-                      ? "You're Live!"
-                      : canSpeak
-                      ? "You're a Speaker"
-                      : "Listening"}
+                    {isHost ? "You're Live!" : canSpeak ? "You're a Speaker" : "Listening"}
                   </p>
-                  <Badge variant={isHost ? "default" : "secondary"}>
-                    {myRole}
-                  </Badge>
+                  <Badge variant={isHost ? "default" : "secondary"}>{myRole}</Badge>
                 </div>
 
                 {canSpeak && (
                   <>
-                    {micPermission === "denied" && (
-                      <p className="text-sm text-destructive">
-                        ❌ Microphone access denied
-                      </p>
-                    )}
-                    
                     <Button
                       size="lg"
                       variant={isMuted ? "destructive" : "default"}
@@ -325,54 +304,33 @@ export default function RoomPage() {
                       onClick={handleToggleMic}
                       disabled={!isConnected}
                     >
-                      {isMuted ? (
-                        <MicOff className="h-6 w-6" />
-                      ) : (
-                        <Mic className="h-6 w-6" />
-                      )}
+                      {isMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
                     </Button>
                     <p className="text-sm text-muted-foreground">
                       {isMuted ? "Tap to unmute" : "Tap to mute"}
                     </p>
                   </>
                 )}
-
-                {!canSpeak && (
-                  <p className="text-sm text-muted-foreground">
-                    Hanya host dan speaker yang bisa berbicara
-                  </p>
-                )}
               </div>
 
-              {/* ✅ Audio Meter for Host/Speaker */}
+              {/* Audio Meter */}
               {canSpeak && isCapturing && (
-                <AudioMeter
-                  stream={mediaStream}
-                  label={`Your Audio (${isMuted ? "Muted" : "Live"})`}
-                  showDeviceInfo={false}
-                />
+                <AudioMeter stream={mediaStream} label={`Your Audio (${isMuted ? "Muted" : "Live"})`} />
               )}
 
-              {/* Audio Settings Panel */}
+              {/* Settings Panel */}
               {showSettings && (
-                <Card className="border-dashed">
-                  <CardHeader>
-                    <CardTitle className="text-sm">Audio Settings</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <AudioDeviceSelector
-                      onInputDeviceChange={(deviceId) => {
-                        console.log("🎤 Switched mic:", deviceId)
-                        // TODO: Restart audio capture with new device
-                      }}
-                      onOutputDeviceChange={(deviceId) => {
-                        console.log("🔊 Switched speaker:", deviceId)
-                        // TODO: Set audio output device
-                      }}
-                      showOutput={true}
-                    />
-                  </CardContent>
-                </Card>
+                <div className="space-y-4">
+                  {!canSpeak && <VolumeControl volume={playbackVolume} onChange={handleVolumeChange} />}
+                  <Card className="border-dashed">
+                    <CardHeader>
+                      <CardTitle className="text-sm">Audio Settings</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <AudioDeviceSelector showOutput={!canSpeak} />
+                    </CardContent>
+                  </Card>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -389,8 +347,6 @@ export default function RoomPage() {
               <div className="space-y-3">
                 {participants.map((participant) => {
                   const isMe = participant.user_id === user.id
-                  const isSpeaker = participant.role === "speaker"
-                  const isParticipantHost = participant.role === "host"
                   const isSpeaking = speakingUsers.has(participant.user_id)
 
                   return (
@@ -398,29 +354,22 @@ export default function RoomPage() {
                       key={participant.user_id}
                       className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted transition-colors"
                     >
-                      <Avatar>
-                        <AvatarFallback>
-                          {isParticipantHost
-                            ? "H"
-                            : isSpeaker
-                            ? "S"
-                            : "L"}
-                        </AvatarFallback>
-                      </Avatar>
+                      <UserAvatar 
+                        user={{
+                          id: participant.user_id,
+                          email: participant.email,
+                          user_metadata: {
+                            avatar_url: participant.avatar_url,
+                            full_name: participant.full_name,
+                          }
+                        }} 
+                      />
 
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">
-                          {isMe
-                            ? "You"
-                            : participant.username ||
-                              `User ${participant.user_id.slice(0, 6)}`}
+                          {isMe ? "You" : participant.full_name || participant.username || `User ${participant.user_id.slice(0, 6)}`}
                         </p>
-                        <Badge
-                          variant={
-                            isParticipantHost ? "default" : "secondary"
-                          }
-                          className="text-xs"
-                        >
+                        <Badge variant={participant.role === "host" ? "default" : "secondary"} className="text-xs">
                           {participant.role}
                         </Badge>
                       </div>
@@ -434,7 +383,11 @@ export default function RoomPage() {
                       </div>
 
                       {isHost && !isMe && participant.role === "listener" && (
-                        <Button size="sm" variant="outline">
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          onClick={() => handleInviteSpeaker(participant.user_id)}
+                        >
                           <UserPlus className="h-3 w-3" />
                         </Button>
                       )}

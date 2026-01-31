@@ -1,4 +1,4 @@
-// types/room.ts
+// app/types/room.ts
 
 export type Role = "host" | "speaker" | "listener"
 
@@ -9,14 +9,22 @@ export interface Room {
   listeners: number
 }
 
-export interface RoomDetail extends Room {
-  participants: Participant[]
-}
-
 export interface Participant {
   user_id: string
-  username?: string
   role: Role
+  // ✅ Extended user info
+  email?: string
+  username?: string
+  avatar_url?: string
+  full_name?: string
+}
+
+export interface RoomDetail {
+  id: string
+  title: string
+  is_live: boolean
+  listeners: number
+  participants: Participant[]
 }
 
 export interface CreateRoomRequest {
@@ -30,4 +38,5 @@ export interface CreateRoomResponse {
 export interface JoinRoomResponse {
   status: string
   room_id: string
+  role?: string
 }
