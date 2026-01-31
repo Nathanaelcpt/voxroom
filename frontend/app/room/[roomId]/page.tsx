@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
-import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus } from "lucide-react"
+import { AudioMeter } from "@/components/audio-meter"
+import { AudioDeviceSelector } from "@/components/audio-device-selector"
+import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus, Settings } from "lucide-react"
 import { useUser } from "@/hooks/use-user"
 import { getRoomDetails, endRoom } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
@@ -28,6 +30,7 @@ export default function RoomPage() {
   const [loading, setLoading] = useState(true)
   const [roomLoaded, setRoomLoaded] = useState(false)
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set())
+  const [showSettings, setShowSettings] = useState(false)
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
@@ -155,7 +158,7 @@ export default function RoomPage() {
   })
 
   // STEP 3: Audio streaming
-  const { micPermission, isCapturing, playAudioChunk } = useAudioStream({
+  const { micPermission, isCapturing, playAudioChunk, mediaStream } = useAudioStream({
     isHost,
     canSpeak,
     isMuted,
@@ -252,6 +255,15 @@ export default function RoomPage() {
           </div>
 
           <div className="flex gap-2">
+            {/* Settings Button */}
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowSettings(!showSettings)}
+            >
+              <Settings className="h-4 w-4" />
+            </Button>
+
             {isHost && (
               <Button variant="destructive" onClick={handleEndRoom}>
                 End Room
@@ -332,22 +344,36 @@ export default function RoomPage() {
                 )}
               </div>
 
-              <div className="h-24 bg-muted rounded-lg flex items-center justify-center">
-                <div className="flex gap-1 items-end h-16">
-                  {[...Array(20)].map((_, i) => (
-                    <div
-                      key={i}
-                      className={`w-2 bg-primary rounded-full transition-all ${
-                        !isMuted && canSpeak && isCapturing ? "animate-pulse" : "opacity-30"
-                      }`}
-                      style={{
-                        height: `${Math.random() * 100}%`,
-                        animationDelay: `${i * 0.1}s`,
+              {/* ✅ Audio Meter for Host/Speaker */}
+              {canSpeak && isCapturing && (
+                <AudioMeter
+                  stream={mediaStream}
+                  label={`Your Audio (${isMuted ? "Muted" : "Live"})`}
+                  showDeviceInfo={false}
+                />
+              )}
+
+              {/* Audio Settings Panel */}
+              {showSettings && (
+                <Card className="border-dashed">
+                  <CardHeader>
+                    <CardTitle className="text-sm">Audio Settings</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <AudioDeviceSelector
+                      onInputDeviceChange={(deviceId) => {
+                        console.log("🎤 Switched mic:", deviceId)
+                        // TODO: Restart audio capture with new device
                       }}
+                      onOutputDeviceChange={(deviceId) => {
+                        console.log("🔊 Switched speaker:", deviceId)
+                        // TODO: Set audio output device
+                      }}
+                      showOutput={true}
                     />
-                  ))}
-                </div>
-              </div>
+                  </CardContent>
+                </Card>
+              )}
             </CardContent>
           </Card>
 
