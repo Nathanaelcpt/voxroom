@@ -25,12 +25,12 @@ export default function RoomPage() {
   const [myRole, setMyRole] = useState<Role>("listener")
   const [isMuted, setIsMuted] = useState(true)
   const [loading, setLoading] = useState(true)
-  const [roomLoaded, setRoomLoaded] = useState(false) // ✅ Flag untuk WebSocket
+  const [roomLoaded, setRoomLoaded] = useState(false)
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
 
-  // ✅ STEP 1: Load room details FIRST (before WebSocket)
+  // STEP 1: Load room details FIRST (before WebSocket)
   useEffect(() => {
     if (!roomId || !user) {
       if (!user) {
@@ -48,7 +48,7 @@ export default function RoomPage() {
         setRoom(data)
         setParticipants(data.participants)
 
-        // ✅ Get role from database
+        // Get role from database response
         const me = data.participants.find((p) => p.user_id === user.id)
         if (me) {
           setMyRole(me.role)
@@ -57,7 +57,6 @@ export default function RoomPage() {
           console.warn("⚠️ User not in participants yet")
         }
 
-        // ✅ CRITICAL: Set roomLoaded AFTER we have the data
         setRoomLoaded(true)
         console.log("✅ Room loaded, WebSocket can connect now")
       } catch (err) {
@@ -72,19 +71,19 @@ export default function RoomPage() {
     loadRoom()
   }, [roomId, user, router])
 
-  // WebSocket message handler
+  // ✅ FIX 1: Removed myRole from deps.
+  // role_assigned now always trusts backend (source of truth).
+  // role_updated handles mid-session role changes separately.
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       switch (message.type) {
         case "role_assigned":
           if (message.payload?.role) {
-            console.log("📨 WS Role assigned:", message.payload.role, "| DB role:", myRole)
-            // ✅ Don't overwrite if we already have correct role from DB
-            if (myRole === "listener") {
-              setMyRole(message.payload.role)
-            } else {
-              console.log("ℹ️ Keeping DB role:", myRole)
-            }
+            // ✅ FIX 2: Always trust backend role.
+            // Backend confirmed it returns correct role from DB.
+            // No need to guard with myRole check.
+            console.log("📨 WS role_assigned:", message.payload.role)
+            setMyRole(message.payload.role)
           }
           break
 
@@ -122,15 +121,16 @@ export default function RoomPage() {
           console.log("📨 Unhandled message:", message.type)
       }
     },
-    [user, router, myRole]
+    [user, router] // ✅ Only user and router — both are stable refs
   )
 
-  // ✅ STEP 2: Connect WebSocket ONLY AFTER room is loaded
+  // ✅ FIX 3: Removed inline onOpen/onClose.
+  // use-websocket.ts already uses useRef for callbacks,
+  // so these are safe even as inline functions.
+  // But removing them keeps this cleaner.
   const { isConnected, send } = useWebSocket({
-    roomId: roomLoaded && roomId ? roomId : "", // ✅ Empty string prevents connection
+    roomId: roomLoaded && roomId ? roomId : "",
     onMessage: handleWSMessage,
-    onOpen: () => console.log("✅ Connected to WebSocket"),
-    onClose: () => console.log("🔌 Disconnected from WebSocket"),
   })
 
   // Toggle mic

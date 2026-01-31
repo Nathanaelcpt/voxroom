@@ -22,11 +22,25 @@ export function useWebSocket({
   const wsRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
 
-  // Connect to WebSocket
+  // ✅ Store all callbacks in refs — prevents useEffect from re-running
+  const onMessageRef = useRef(onMessage)
+  const onOpenRef = useRef(onOpen)
+  const onCloseRef = useRef(onClose)
+  const onErrorRef = useRef(onError)
+
+  // ✅ Keep refs in sync on every render, WITHOUT triggering useEffect
+  useEffect(() => {
+    onMessageRef.current = onMessage
+    onOpenRef.current = onOpen
+    onCloseRef.current = onClose
+    onErrorRef.current = onError
+  })
+
+  // ✅ useEffect only depends on roomId now
   useEffect(() => {
     if (!roomId) {
-    console.log("⏳ Waiting for roomId...")
-    return
+      console.log("⏳ Waiting for roomId...")
+      return
     }
 
     let mounted = true
@@ -39,28 +53,24 @@ export function useWebSocket({
           return
         }
 
-        // ✅ Send token as query parameter instead of header
         const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL}/ws?roomId=${roomId}&token=${token}`
-        
         console.log("🔌 Connecting to WebSocket:", wsUrl.replace(token, "***"))
-        
+
         const ws = new WebSocket(wsUrl)
 
         ws.addEventListener("open", () => {
           if (!mounted) return
-
           console.log("✅ WebSocket connected")
           setIsConnected(true)
-          onOpen?.()
+          onOpenRef.current?.()   // ✅ call via ref
         })
 
         ws.addEventListener("message", (event) => {
           if (!mounted) return
-
           try {
             const message: WSMessage = JSON.parse(event.data)
             console.log("📨 WS message:", message)
-            onMessage?.(message)
+            onMessageRef.current?.(message)  // ✅ call via ref
           } catch (err) {
             console.error("Failed to parse WS message:", err)
           }
@@ -68,17 +78,15 @@ export function useWebSocket({
 
         ws.addEventListener("close", () => {
           if (!mounted) return
-
           console.log("🔌 WebSocket disconnected")
           setIsConnected(false)
-          onClose?.()
+          onCloseRef.current?.()  // ✅ call via ref
         })
 
         ws.addEventListener("error", (error) => {
           if (!mounted) return
-
           console.error("❌ WebSocket error:", error)
-          onError?.(error)
+          onErrorRef.current?.(error)  // ✅ call via ref
         })
 
         wsRef.current = ws
@@ -96,22 +104,17 @@ export function useWebSocket({
         wsRef.current = null
       }
     }
-  }, [roomId, onMessage, onOpen, onClose, onError])
+  }, [roomId])  // ✅ ONLY roomId — no more callback deps
 
-  // Send message
   const send = useCallback((type: WSMessageType, payload?: any) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       console.warn("⚠️ WebSocket not connected, cannot send message")
       return
     }
-
     const message: WSMessage = { type, payload }
     wsRef.current.send(JSON.stringify(message))
     console.log("📤 Sent message:", message)
   }, [])
 
-  return {
-    isConnected,
-    send,
-  }
+  return { isConnected, send }
 }
