@@ -34,25 +34,6 @@ export default function GoLiveSetupPage() {
   const [loading, setLoading] = useState(false)
   const [testStream, setTestStream] = useState<MediaStream | null>(null)
 
-async function handleTestAudio() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-  setTestStream(stream)
-}
-
-return (
-  <>
-    <AudioDeviceSelector 
-      showOutput={false}
-      onInputDeviceChange={(deviceId) => console.log("Selected:", deviceId)}
-    />
-    
-    <Button onClick={handleTestAudio}>Test Microphone</Button>
-    
-    <AudioMeter stream={testStream} label="Mic Test" showDeviceInfo />
-  </>
-)
-
-
   // Load audio devices
   useEffect(() => {
     async function loadDevices() {
@@ -86,7 +67,25 @@ return (
     }
 
     loadDevices()
-  }, [])
+    }, [])
+
+      async function handleTestAudio() {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      setTestStream(stream)
+    }
+
+    return (
+      <>
+        <AudioDeviceSelector 
+          showOutput={false}
+          onInputDeviceChange={(deviceId) => console.log("Selected:", deviceId)}
+        />
+        
+        <Button onClick={handleTestAudio}>Test Microphone</Button>
+        
+        <AudioMeter stream={testStream} label="Mic Test" showDeviceInfo />
+      </>
+    )
 
   async function handleGoLive() {
     // Validation
