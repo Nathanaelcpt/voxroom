@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { AudioMeter } from "@/components/audio-meter"
+import { AudioDeviceSelector } from "@/components/audio-device-selector"
 import {
   Select,
   SelectContent,
@@ -15,6 +17,7 @@ import {
 import { AlertCircle, Mic } from "lucide-react"
 import { createRoom } from "@/lib/api/rooms"
 import type { CreateRoomRequest } from "@/app/types/room"
+
 
 interface AudioDevice {
   deviceId: string
@@ -29,6 +32,26 @@ export default function GoLiveSetupPage() {
   const [selectedMic, setSelectedMic] = useState("")
   const [permissionError, setPermissionError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [testStream, setTestStream] = useState<MediaStream | null>(null)
+
+async function handleTestAudio() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+  setTestStream(stream)
+}
+
+return (
+  <>
+    <AudioDeviceSelector 
+      showOutput={false}
+      onInputDeviceChange={(deviceId) => console.log("Selected:", deviceId)}
+    />
+    
+    <Button onClick={handleTestAudio}>Test Microphone</Button>
+    
+    <AudioMeter stream={testStream} label="Mic Test" showDeviceInfo />
+  </>
+)
+
 
   // Load audio devices
   useEffect(() => {

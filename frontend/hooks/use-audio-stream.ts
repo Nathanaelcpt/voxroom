@@ -28,9 +28,14 @@ export function useAudioStream({
   const processorRef = useRef<ScriptProcessorNode | null>(null)
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
 
+  // ✅ Track mute state in ref to avoid closure issues
+  const isMutedRef = useRef(isMuted)
+  useEffect(() => {
+    isMutedRef.current = isMuted
+  }, [isMuted])
+
   // Audio playback refs (for listeners)
   const playbackContextRef = useRef<AudioContext | null>(null)
-  const audioBuffersRef = useRef<Map<string, AudioBuffer[]>>(new Map())
 
   // Start capturing audio (for host/speaker)
   const startCapture = useCallback(async () => {
@@ -60,20 +65,22 @@ export function useAudioStream({
       sourceRef.current = source
 
       // Use ScriptProcessorNode for audio capture
-      // Note: ScriptProcessorNode is deprecated but still widely supported.
-      // For production, consider migrating to AudioWorklet in the future.
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       processorRef.current = processor
 
       processor.onaudioprocess = (e) => {
-        if (isMuted || !isConnected) return
+        // ✅ FIX: Only check connection, not mute state
+        // Mute is UI-only — backend controls via mic_on/mic_off
+        if (!isConnected) return
+
+        // ✅ Check mute via ref to get current value
+        if (isMutedRef.current) return
 
         const inputData = e.inputBuffer.getChannelData(0)
         
         // Convert Float32Array to Int16Array (PCM)
         const pcmData = new Int16Array(inputData.length)
         for (let i = 0; i < inputData.length; i++) {
-          // Convert float (-1 to 1) to int16 (-32768 to 32767)
           const s = Math.max(-1, Math.min(1, inputData[i]))
           pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
         }
@@ -91,7 +98,7 @@ export function useAudioStream({
       setMicPermission("denied")
       alert("Microphone access denied. Please allow microphone access in your browser settings.")
     }
-  }, [canSpeak, isCapturing, isMuted, isConnected, sendAudioChunk])
+  }, [canSpeak, isCapturing, isConnected, sendAudioChunk])
 
   // Stop capturing audio
   const stopCapture = useCallback(() => {
@@ -155,23 +162,18 @@ export function useAudioStream({
     }
   }, [])
 
-  // Auto-start/stop capture based on mute state
+  // ✅ Always keep mic active if canSpeak (for audio meter to work)
+  // Only control transmission via isMuted check in processor
   useEffect(() => {
     if (!canSpeak) {
       stopCapture()
       return
     }
 
-    if (!isMuted && isConnected) {
+    if (isConnected && !isCapturing) {
       startCapture()
-    } else if (isMuted) {
-      // Keep mic active but don't send chunks (handled in onaudioprocess)
-      // This prevents audio glitches when toggling mute
-      if (!isCapturing) {
-        startCapture()
-      }
     }
-  }, [canSpeak, isMuted, isConnected, isCapturing, startCapture, stopCapture])
+  }, [canSpeak, isConnected, isCapturing, startCapture, stopCapture])
 
   // Cleanup on unmount
   useEffect(() => {
@@ -183,9 +185,11 @@ export function useAudioStream({
     }
   }, [stopCapture])
 
+  // ✅ Export media stream for audio meter
   return {
     micPermission,
     isCapturing,
     playAudioChunk,
+    mediaStream: mediaStreamRef.current,
   }
 }
