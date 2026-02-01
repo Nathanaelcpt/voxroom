@@ -166,3 +166,21 @@ export async function removeSpeaker(
     throw new Error("Failed to remove speaker")
   }
 }
+
+export async function getParticipantsWithProfiles(roomId: string) {
+  const response = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/rooms/${roomId}/participants-with-profiles`,
+    {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${await getAccessToken()}`,
+      },
+    }
+  )
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch participants with profiles")
+  }
+
+  return response.json()
+}

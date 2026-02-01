@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -523,4 +524,102 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"error": msg,
 	})
+}
+
+func GetParticipantsWithProfilesHandler(w http.ResponseWriter, r *http.Request) {
+	// Extract roomID from path: /rooms/{id}/participants-with-profiles
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/participants-with-profiles")
+
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
+		return
+	}
+
+	participants, err := GetParticipantsWithProfiles(roomID)
+	if err != nil {
+		log.Printf("❌ Failed to get participants with profiles: %v", err)
+		writeJSONError(w, "failed to get participants", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"participants": participants,
+	})
+}
+
+// ===== FIX GetParticipantsWithProfiles =====
+func GetParticipantsWithProfiles(roomID string) ([]ParticipantWithProfile, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	query := `
+		SELECT 
+			rp.user_id,
+			rp.role,
+			u.email,
+			u.raw_user_meta_data->>'full_name' as full_name,
+			u.raw_user_meta_data->>'avatar_url' as avatar_url
+		FROM room_participants rp
+		LEFT JOIN auth.users u ON rp.user_id = u.id
+		WHERE rp.room_id = $1::uuid AND rp.left_at IS NULL
+		ORDER BY 
+			CASE rp.role 
+				WHEN 'host' THEN 1
+				WHEN 'speaker' THEN 2
+				WHEN 'listener' THEN 3
+			END
+	`
+	
+	rows, err := db.Pool.Query(ctx, query, roomID)
+	if err != nil {
+		log.Printf("❌ GetParticipantsWithProfiles query error: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+	
+	var participants []ParticipantWithProfile
+	
+	for rows.Next() {
+		var p ParticipantWithProfile
+		var email, fullName, avatarURL sql.NullString
+		
+		err := rows.Scan(&p.UserID, &p.Role, &email, &fullName, &avatarURL)
+		if err != nil {
+			log.Printf("⚠️ Error scanning participant: %v", err)
+			continue
+		}
+		
+		if email.Valid {
+			p.Email = email.String
+			// Extract username from email
+			p.Username = strings.Split(email.String, "@")[0]
+		}
+		
+		if fullName.Valid {
+			p.FullName = fullName.String
+		}
+		
+		if avatarURL.Valid {
+			p.AvatarURL = avatarURL.String
+		}
+		
+		participants = append(participants, p)
+	}
+	
+	if participants == nil {
+		participants = []ParticipantWithProfile{}
+	}
+	
+	return participants, nil
+}
+
+type ParticipantWithProfile struct {
+	UserID    string `json:"user_id"`
+	Role      string `json:"role"`
+	Email     string `json:"email,omitempty"`
+	Username  string `json:"username,omitempty"`
+	FullName  string `json:"full_name,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 }

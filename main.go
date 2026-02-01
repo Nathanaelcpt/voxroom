@@ -148,6 +148,9 @@ func handleRoomRoutes(w http.ResponseWriter, r *http.Request) {
 		// POST /rooms/{id}/remove-speaker - Remove speaker (host only)
 		auth.AuthMiddleware(http.HandlerFunc(room.RemoveSpeaker)).ServeHTTP(w, r)
 
+	case r.Method == "GET" && action == "participants-with-profiles":
+    	room.GetParticipantsWithProfilesHandler(w, r)
+
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}

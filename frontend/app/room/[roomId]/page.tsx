@@ -11,10 +11,9 @@ import { VolumeControl } from "@/components/volume-control"
 import { UserAvatar, getUserDisplayName } from "@/components/user-avatar"
 import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus, Settings } from "lucide-react"
 import { useUser } from "@/hooks/use-user"
-import { getRoomDetails, endRoom, inviteSpeaker } from "@/lib/api/rooms"
+import { getRoomDetails, endRoom, inviteSpeaker, getParticipantsWithProfiles } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
-import { getSupabase } from "@/lib/supabase"
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 
@@ -55,27 +54,16 @@ export default function RoomPage() {
         const data = await getRoomDetails(roomId!)
         setRoom(data)
 
-        // ✅ Enrich participants with user profiles from Supabase
-        const supabase = getSupabase()
-        const enrichedParticipants = await Promise.all(
-          data.participants.map(async (p) => {
-            // Try to get user profile from Supabase
-            const { data: profile } = await supabase.auth.admin.getUserById(p.user_id)
-            
-            return {
-              ...p,
-              email: profile?.user?.email,
-              full_name: profile?.user?.user_metadata?.full_name,
-              avatar_url: profile?.user?.user_metadata?.avatar_url,
-              username: profile?.user?.user_metadata?.username || 
-                        profile?.user?.email?.split("@")[0],
-            }
-          })
-        )
+        // ✅ Get participants with profiles from backend
+        try {
+          const profilesData = await getParticipantsWithProfiles(roomId!)
+          setParticipants(profilesData.participants)
+        } catch (err) {
+          console.warn("⚠️ Failed to load participant profiles, using basic data:", err)
+          setParticipants(data.participants)
+        }
 
-        setParticipants(enrichedParticipants)
-
-        const me = enrichedParticipants.find((p) => p.user_id === user.id)
+        const me = data.participants.find((p) => p.user_id === user.id)
         if (me) {
           setMyRole(me.role)
           console.log("✅ Role from DB:", me.role)
@@ -201,9 +189,9 @@ export default function RoomPage() {
     try {
       await inviteSpeaker(roomId, userId)
       console.log("✅ Invited speaker:", userId)
-      // Refresh participants
-      const data = await getRoomDetails(roomId)
-      setParticipants(data.participants)
+      // Refresh participants with profiles
+      const profilesData = await getParticipantsWithProfiles(roomId)
+      setParticipants(profilesData.participants)
     } catch (err) {
       console.error("Failed to invite speaker:", err)
       alert("Gagal invite speaker")
@@ -348,6 +336,7 @@ export default function RoomPage() {
                 {participants.map((participant) => {
                   const isMe = participant.user_id === user.id
                   const isSpeaking = speakingUsers.has(participant.user_id)
+                  const displayName = isMe ? "You" : (participant.full_name || participant.username || participant.email?.split("@")[0] || `User ${participant.user_id.slice(0, 6)}`)
 
                   return (
                     <div
@@ -366,9 +355,7 @@ export default function RoomPage() {
                       />
 
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">
-                          {isMe ? "You" : participant.full_name || participant.username || `User ${participant.user_id.slice(0, 6)}`}
-                        </p>
+                        <p className="font-medium truncate">{displayName}</p>
                         <Badge variant={participant.role === "host" ? "default" : "secondary"} className="text-xs">
                           {participant.role}
                         </Badge>
