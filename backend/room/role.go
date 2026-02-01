@@ -84,24 +84,24 @@ func SetUserRole(roomID, userID string, newRole Role, invitedBy string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// ✅ CRITICAL FIX: Handle invitedBy properly
-	var invitedByUUID interface{}
+	// Handle NULL for empty invitedBy
+	var invitedByParam interface{}
 	if invitedBy != "" {
-		invitedByUUID = invitedBy
+		invitedByParam = invitedBy
 	} else {
-		invitedByUUID = nil
+		invitedByParam = nil
 	}
 
-	// ✅ FIX: Explicit UUID casting on room_id and user_id
+	// ✅ ULTIMATE FIX: Cast $1 to TEXT in the CASE statement
 	query := `
 		UPDATE room_participants 
-		SET role = $1, 
+		SET role = $1::text, 
 		    invited_by = $2, 
-		    invited_at = CASE WHEN $1 = 'speaker' THEN NOW() ELSE NULL END
+		    invited_at = CASE WHEN $1::text = 'speaker' THEN NOW() ELSE NULL END
 		WHERE room_id = $3::uuid AND user_id = $4::uuid
 	`
 
-	result, err := db.Pool.Exec(ctx, query, string(newRole), invitedByUUID, roomID, userID)
+	result, err := db.Pool.Exec(ctx, query, string(newRole), invitedByParam, roomID, userID)
 	if err != nil {
 		log.Printf("❌ SetUserRole failed: room=%s, user=%s, role=%s, error=%v",
 			roomID, userID, newRole, err)
@@ -110,12 +110,12 @@ func SetUserRole(roomID, userID string, newRole Role, invitedBy string) error {
 
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
-		log.Printf("⚠️ SetUserRole: no rows affected (user may not exist in room)")
+		log.Printf("⚠️ SetUserRole: no rows affected")
 		return fmt.Errorf("user %s not found in room %s", userID, roomID)
 	}
 
-	log.Printf("✅ SetUserRole: room=%s, user=%s, role=%s, invited_by=%v, rows_affected=%d",
-		roomID, userID, newRole, invitedBy, rowsAffected)
+	log.Printf("✅ SetUserRole success: room=%s, user=%s, role=%s, rows_affected=%d",
+		roomID, userID, newRole, rowsAffected)
 
 	return nil
 }
