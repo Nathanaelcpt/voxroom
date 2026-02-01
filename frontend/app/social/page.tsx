@@ -21,6 +21,8 @@ export default function SocialPage() {
     if (!user) return
 
     async function loadSocialData() {
+      if (!user) return // ✅ Extra null check
+
       try {
         const [followersData, followingData] = await Promise.all([
           getFollowers(user.id),
@@ -128,7 +130,6 @@ export default function SocialPage() {
                           user_metadata: {
                             avatar_url: profile.avatar_url,
                             full_name: profile.full_name,
-                            username: profile.username,
                           },
                         }}
                       />
@@ -203,7 +204,6 @@ export default function SocialPage() {
                             user_metadata: {
                               avatar_url: profile.avatar_url,
                               full_name: profile.full_name,
-                              username: profile.username,
                             },
                           }}
                         />
