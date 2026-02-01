@@ -91,51 +91,54 @@ export function OnlineFriendsSidebar() {
           </div>
         ) : (
           <div className="space-y-2">
-            {friends.map((friend) => (
-              <div
-                key={friend.user_id}
-                className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted transition-colors"
-              >
-                <div className="relative">
-                  <UserAvatar
-                    user={{
-                      id: friend.user_id,
-                      email: friend.email,
-                      user_metadata: {
-                        avatar_url: friend.avatar_url,
-                        full_name: friend.full_name,
-                        username: friend.username,
-                      },
-                    }}
-                    size="sm"
-                  />
-                  <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-background" />
-                </div>
+            {friends.map((friend) => {
+              const displayName = friend.full_name || friend.username || friend.email?.split("@")[0]
 
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate">
-                    {friend.full_name || friend.username || friend.email?.split("@")[0]}
-                  </p>
-                  {friend.in_room ? (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <Radio className="h-3 w-3" />
-                      <span>In a room</span>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">Online</p>
+              return (
+                <div
+                  key={friend.user_id}
+                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-muted transition-colors"
+                >
+                  <div className="relative">
+                    <UserAvatar
+                      user={{
+                        id: friend.user_id,
+                        email: friend.email,
+                        user_metadata: {
+                          avatar_url: friend.avatar_url,
+                          full_name: friend.full_name,
+                        },
+                      }}
+                      size="sm"
+                    />
+                    <div className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full bg-green-500 border-2 border-background" />
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {displayName}
+                    </p>
+                    {friend.in_room ? (
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Radio className="h-3 w-3" />
+                        <span>In a room</span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Online</p>
+                    )}
+                  </div>
+
+                  {friend.in_room && (
+                    <Link href={`/room/${friend.in_room}`}>
+                      <Button variant="ghost" size="sm" className="h-8">
+                        <Radio className="h-3 w-3 mr-1" />
+                        Join
+                      </Button>
+                    </Link>
                   )}
                 </div>
-
-                {friend.in_room && (
-                  <Link href={`/room/${friend.in_room}`}>
-                    <Button variant="ghost" size="sm" className="h-8">
-                      <Radio className="h-3 w-3 mr-1" />
-                      Join
-                    </Button>
-                  </Link>
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </CardContent>
