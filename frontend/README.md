@@ -1,36 +1,169 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Voxroom
 
-## Getting Started
+Voxroom is a real-time voice room web application that allows users to create and join voice chat rooms directly from the browser.
 
-First, run the development server:
+The app is built with a **Go backend** and a **TypeScript frontend**, using WebSocket for real-time communication and Supabase for authentication.
 
-```bash
+🌐 Live Demo: https://voxroomlive.vercel.app
+
+---
+
+## ✨ Features
+
+- 🎙️ Real-time voice chat  
+- 🧑‍🤝‍🧑 Multiple users per room  
+- 🏠 Create & join voice rooms  
+- 🔐 Authentication with Supabase  
+- ⚡ WebSocket-based real-time connection  
+- 🌍 Fully web-based (no installation)
+
+---
+
+## 🧠 Tech Stack
+
+**Frontend**
+- TypeScript
+- Next.js
+- Tailwind CSS
+- WebSocket
+
+**Backend**
+- Go
+- WebSocket
+- REST API
+
+**Authentication**
+- Supabase
+
+**Deployment**
+- Frontend: Vercel  
+- Backend: Render (or similar)
+
+---
+
+## 🧭 Step-by-Step Usage
+
+### 1️⃣ Open the App
+Go to:
+Visit the Voxroom website:
+
+https://voxroomlive.vercel.app
+
+
+Make sure your browser allows microphone access.
+
+### 2️⃣ Login / Authentication
+
+Users are authenticated using Supabase
+
+After logging in, user data is loaded automatically
+
+Unauthenticated users will be redirected to the login page
+
+### 3️⃣ Create or Join a Room
+
+From the main page, you can:
+
+Create a new voice room
+
+Join an existing room using its room ID
+
+### 4️⃣ Join Voice Chat
+
+When entering a room:
+
+A WebSocket connection is established
+
+Voice streaming starts automatically
+
+Allow microphone permission when prompted
+
+### 5️⃣ Talk in Real Time
+
+Speak through your microphone
+
+Your voice is streamed live to other users in the same room
+
+Multiple users can talk together simultaneously
+
+### 6️⃣ Leave the Room
+
+Leave the page or navigate back
+
+WebSocket connection closes automatically
+
+You are safely removed from the room
+---
+
+## ⚙️ How It Works (Simple)
+
+User logs in via Supabase
+
+Frontend connects to backend using WebSocket
+
+Backend manages rooms and connected users
+
+Audio streams are sent and received in real time
+---
+
+## 🛠️ Local Development
+Requirements
+
+Go 1.20+
+
+Node.js 18+
+
+npm or yarn
+---
+
+## Setup
+1. Clone Repository
+git clone https://github.com/Nathanaelcpt/voxroom.git
+cd voxroom
+
+2. Run Backend
+cd backend
+go mod tidy
+go run .
+
+
+Backend will run on default configured port.
+
+3. Run Frontend
+cd frontend
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Open:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+http://localhost:3000
+---
 
-## Learn More
+## 🐞 Common Issues
 
-To learn more about Next.js, take a look at the following resources:
+No sound
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Check browser microphone permission
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Make sure correct input device is selected
 
-## Deploy on Vercel
+WebSocket disconnected
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Backend might be sleeping (free hosting)
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Refresh the page to reconnect
+---
+
+## 📦 Deployment Notes
+
+Frontend is deployed on Vercel
+
+Backend can be deployed on Render, Railway, or Fly.io
+
+Make sure WebSocket support is enabled
+---
+
+## 📄 License
+
+This project is open-source and free to use.

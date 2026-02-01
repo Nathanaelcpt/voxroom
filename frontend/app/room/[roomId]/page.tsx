@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge"
 import { AudioMeter } from "@/components/audio-meter"
 import { AudioDeviceSelector } from "@/components/audio-device-selector"
 import { VolumeControl } from "@/components/volume-control"
-import { UserAvatar, getUserDisplayName } from "@/components/user-avatar"
+import { UserAvatar } from "@/components/user-avatar"
+import { InviteFriendsModal } from "@/components/invite-friends-modal"
 import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus, Settings } from "lucide-react"
 import { useUser } from "@/hooks/use-user"
 import { getRoomDetails, endRoom, inviteSpeaker, getParticipantsWithProfiles } from "@/lib/api/rooms"
@@ -32,6 +33,7 @@ export default function RoomPage() {
   const [roomLoaded, setRoomLoaded] = useState(false)
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set())
   const [showSettings, setShowSettings] = useState(false)
+  const [showInviteModal, setShowInviteModal] = useState(false)
   const [playbackVolume, setPlaybackVolume] = useState(1.5) // 150% default
 
   const canSpeak = myRole === "host" || myRole === "speaker"
@@ -198,6 +200,24 @@ export default function RoomPage() {
     }
   }
 
+  // Invite friend to room (placeholder - will implement WebSocket invitation later)
+  async function handleInviteFriend(userId: string) {
+    if (!isHost || !roomId) return
+
+    try {
+      // TODO: Send WebSocket invitation instead of direct invite
+      console.log("📨 Sending invitation to:", userId)
+      
+      // For now, just show success message
+      alert(`Invitation sent! (WebSocket invitation coming soon)`)
+      
+      setShowInviteModal(false)
+    } catch (err) {
+      console.error("Failed to invite friend:", err)
+      throw err
+    }
+  }
+
   // Leave/End room
   async function handleLeaveRoom() {
     router.push("/")
@@ -251,6 +271,12 @@ export default function RoomPage() {
           </div>
 
           <div className="flex gap-2">
+            {isHost && (
+              <Button variant="outline" onClick={() => setShowInviteModal(true)}>
+                <UserPlus className="h-4 w-4 mr-2" />
+                Invite Friends
+              </Button>
+            )}
             <Button variant="outline" size="icon" onClick={() => setShowSettings(!showSettings)}>
               <Settings className="h-4 w-4" />
             </Button>
@@ -386,6 +412,17 @@ export default function RoomPage() {
           </Card>
         </div>
       </div>
+
+      {/* Invite Friends Modal */}
+      {isHost && room && (
+        <InviteFriendsModal
+          open={showInviteModal}
+          onClose={() => setShowInviteModal(false)}
+          roomId={roomId!}
+          roomTitle={room.title}
+          onInvite={handleInviteFriend}
+        />
+      )}
     </div>
   )
 }

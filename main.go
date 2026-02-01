@@ -11,6 +11,7 @@ import (
 	"voxroom/backend/auth"
 	"voxroom/backend/db"
 	"voxroom/backend/room"
+	"voxroom/backend/social"
 	"voxroom/backend/ws"
 )
 
@@ -69,6 +70,18 @@ func main() {
 	// WebSocket (NO AUTH MIDDLEWARE - handled inside ServeWS)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 	ws.ServeWS(hub, w, r)
+
+	// ======================
+	// SOCIAL FEATURES ROUTES
+	// ======================
+	
+	// Following system
+	mux.HandleFunc("POST /social/follow", withAuth(social.FollowUser))
+	mux.HandleFunc("POST /social/unfollow", withAuth(social.UnfollowUser))
+	mux.HandleFunc("/social/", handleSocialRoutes) // Handles /social/{id}/followers and /social/{id}/following
+	
+	// Online friends
+	mux.HandleFunc("GET /social/online-friends", withAuth(social.GetOnlineFriends))
 })
 
 	// ======================
@@ -225,4 +238,30 @@ func corsMiddleware(next http.Handler) http.Handler {
 		// Continue to next handler
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleSocialRoutes handles /social/* routes
+func handleSocialRoutes(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	
+	// Extract user ID and action
+	parts := strings.Split(strings.TrimPrefix(path, "/social/"), "/")
+	if len(parts) < 2 {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	
+	userID := parts[0]
+	action := parts[1]
+	
+	log.Printf("🔀 Social route: %s /social/%s/%s", r.Method, userID, action)
+	
+	switch {
+	case r.Method == "GET" && action == "followers":
+		social.GetFollowers(w, r)
+	case r.Method == "GET" && action == "following":
+		social.GetFollowing(w, r)
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
 }

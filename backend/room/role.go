@@ -95,9 +95,9 @@ func SetUserRole(roomID, userID string, newRole Role, invitedBy string) error {
 	// ✅ ULTIMATE FIX: Cast $1 to TEXT in the CASE statement
 	query := `
 		UPDATE room_participants 
-		SET role = $1::text, 
+		SET role = $1::room_role, 
 		    invited_by = $2, 
-		    invited_at = CASE WHEN $1::text = 'speaker' THEN NOW() ELSE NULL END
+		    invited_at = CASE WHEN $1::room_role = 'speaker' THEN NOW() ELSE NULL END
 		WHERE room_id = $3::uuid AND user_id = $4::uuid
 	`
 
