@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,54 +12,74 @@ import (
 
 var Pool *pgxpool.Pool
 
+// Connect establishes connection to PostgreSQL with optimized pool settings
 func Connect(databaseURL string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Parse config
+	// ✅ Parse connection config
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
-		return fmt.Errorf("parse config error: %w", err)
+		return fmt.Errorf("failed to parse database URL: %w", err)
 	}
 
-	// 🔥 Force SSL check
+	// ✅ Force SSL check (important for Supabase)
 	if config.ConnConfig.TLSConfig == nil {
 		return fmt.Errorf("SSL is required but not configured in DATABASE_URL")
 	}
 
-	// 🆕 Connection pool settings (optimized for Supabase)
-	config.MaxConns = 10                      // Increase for better concurrency
-	config.MinConns = 2                       // Keep warm connections
-	config.MaxConnLifetime = time.Hour        // Recycle connections hourly
-	config.MaxConnIdleTime = 30 * time.Minute // Close idle connections
-	config.HealthCheckPeriod = 1 * time.Minute // Check health regularly
-	
-	// 🆕 Connection timeout settings
-	config.ConnConfig.ConnectTimeout = 10 * time.Second // Wait longer for initial connection
+	// ✅ Optimize connection pool settings
+	config.MaxConns = 20                           // Max connections in pool
+	config.MinConns = 2                            // Min idle connections
+	config.MaxConnLifetime = time.Hour             // Recycle connections after 1 hour
+	config.MaxConnIdleTime = 30 * time.Minute      // Close idle connections after 30 min
+	config.HealthCheckPeriod = 1 * time.Minute     // Health check interval
+	config.ConnConfig.ConnectTimeout = 15 * time.Second // ✅ Connection timeout
 
-	fmt.Println("📡 Creating connection pool...")
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	log.Println("📡 Creating connection pool...")
+	Pool, err = pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
-		return fmt.Errorf("create pool error: %w", err)
+		return fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
-	// 🆕 Ping with retry logic
-	fmt.Println("🏓 Pinging database with retry...")
-	if err = pingWithRetry(pool, 5); err != nil {
-		pool.Close() // cleanup
+	// ✅ Ping with retry logic
+	log.Println("🏓 Pinging database with retry...")
+	if err := pingWithRetry(Pool, 5); err != nil {
+		Pool.Close()
 		return fmt.Errorf("ping error after retries: %w", err)
 	}
 
-	Pool = pool
-	fmt.Println("✅ Connected to PostgreSQL")
-	
-	// 🆕 Start background health monitor
-	go monitorConnection(pool)
-	
+	log.Println("✅ Database connection pool established")
+	log.Printf("   MaxConns: %d, MinConns: %d", config.MaxConns, config.MinConns)
+
+	// ✅ Start background health monitor
+	go monitorConnection(Pool)
+
 	return nil
 }
 
-// 🆕 Ping database with retry logic
+// Close closes the database connection pool
+func Close() {
+	if Pool != nil {
+		Pool.Close()
+		log.Println("✅ Database connection pool closed")
+	}
+}
+
+// HealthCheck performs a database health check
+func HealthCheck() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := Pool.Ping(ctx); err != nil {
+		log.Printf("⚠️ Database health check failed: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// pingWithRetry pings database with retry logic
 func pingWithRetry(pool *pgxpool.Pool, maxRetries int) error {
 	for i := 0; i < maxRetries; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -81,7 +102,7 @@ func pingWithRetry(pool *pgxpool.Pool, maxRetries int) error {
 	return fmt.Errorf("failed to ping database after %d attempts", maxRetries)
 }
 
-// 🆕 Monitor connection health in background
+// monitorConnection monitors connection health in background
 func monitorConnection(pool *pgxpool.Pool) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -97,42 +118,63 @@ func monitorConnection(pool *pgxpool.Pool) {
 	}
 }
 
-// 🆕 Execute query with automatic retry on connection errors
-func ExecuteWithRetry(ctx context.Context, maxRetries int, operation func(ctx context.Context) error) error {
-	for i := 0; i < maxRetries; i++ {
-		err := operation(ctx)
+// ExecuteWithRetry executes a function with retry logic
+func ExecuteWithRetry(ctx context.Context, maxRetries int, fn func(context.Context) error) error {
+	var err error
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err = fn(ctx)
 		if err == nil {
-			return nil
+			return nil // Success
 		}
 
-		// Check if it's a connection error
-		if isConnectionError(err) && i < maxRetries-1 {
-			delay := time.Duration(i+1) * time.Second
-			log.Printf("⚠️ Connection error detected (attempt %d/%d): %v. Retrying in %v...", i+1, maxRetries, err, delay)
-			
-			// Wait before retry
+		// Check if context is already canceled
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Check if it's a connection error that should be retried
+		if isConnectionError(err) && attempt < maxRetries {
+			delay := time.Duration(attempt) * 500 * time.Millisecond
+			log.Printf("⏳ Retry attempt %d/%d after %v (connection error: %v)", attempt, maxRetries, delay, err)
+
 			select {
+			case <-time.After(delay):
+				// Continue to next attempt
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(delay):
-				continue
 			}
+			continue
 		}
 
-		// If not connection error or last retry, return error
-		return err
+		// Don't retry on last attempt or non-connection errors
+		if attempt == maxRetries {
+			break
+		}
+
+		// Exponential backoff for other errors
+		delay := time.Duration(attempt) * 500 * time.Millisecond
+		log.Printf("⏳ Retry attempt %d/%d after %v (error: %v)", attempt, maxRetries, delay, err)
+
+		select {
+		case <-time.After(delay):
+			// Continue to next attempt
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
-	return fmt.Errorf("max retries reached")
+
+	return err
 }
 
-// 🆕 Check if error is connection-related
+// isConnectionError checks if error is connection-related
 func isConnectionError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	errMsg := err.Error()
-	
+	errMsg := strings.ToLower(err.Error())
+
 	// Common connection error patterns
 	connectionErrors := []string{
 		"connection refused",
@@ -142,12 +184,15 @@ func isConnectionError(err error) bool {
 		"i/o timeout",
 		"connection closed",
 		"server closed the connection",
-		"EOF",
+		"eof",
 		"deadline exceeded",
+		"context deadline exceeded",
+		"network is unreachable",
+		"connection timed out",
 	}
 
 	for _, pattern := range connectionErrors {
-		if contains(errMsg, pattern) {
+		if strings.Contains(errMsg, pattern) {
 			return true
 		}
 	}
@@ -158,29 +203,4 @@ func isConnectionError(err error) bool {
 // IsConnectionError checks if error is connection-related (exported version)
 func IsConnectionError(err error) bool {
 	return isConnectionError(err)
-}
-
-// Helper function to check if string contains substring (case-insensitive)
-func contains(str, substr string) bool {
-	return len(str) >= len(substr) && 
-		(str == substr || len(str) > len(substr) && 
-		(str[:len(substr)] == substr || str[len(str)-len(substr):] == substr ||
-		findSubstring(str, substr)))
-}
-
-func findSubstring(str, substr string) bool {
-	for i := 0; i <= len(str)-len(substr); i++ {
-		if str[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// Close the connection pool
-func Close() {
-	if Pool != nil {
-		Pool.Close()
-		fmt.Println("🔌 Database connection closed")
-	}
 }

@@ -81,25 +81,33 @@ func SetUserRole(roomID, userID string, newRole Role, invitedBy string) error {
 		return fmt.Errorf("invalid role: %s", newRole)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // ✅ Increased from 5s to 10s
 	defer cancel()
 
-	_, err := db.Pool.Exec(ctx, `
+	// ✅ FIX: Explicit UUID casting to avoid PostgreSQL type deduction error
+	query := `
 		UPDATE room_participants 
 		SET role = $1, 
-		    invited_by = $2, 
+		    invited_by = CASE WHEN $2 != '' THEN $2::uuid ELSE NULL END, 
 		    invited_at = CASE WHEN $1 = 'speaker' THEN NOW() ELSE NULL END
-		WHERE room_id = $3 AND user_id = $4
-	`, newRole, invitedBy, roomID, userID)
+		WHERE room_id = $3::uuid AND user_id = $4::uuid
+	`
 
+	result, err := db.Pool.Exec(ctx, query, newRole, invitedBy, roomID, userID)
 	if err != nil {
 		log.Printf("❌ SetUserRole failed: room=%s, user=%s, role=%s, error=%v",
 			roomID, userID, newRole, err)
 		return err
 	}
 
-	log.Printf("✅ SetUserRole: room=%s, user=%s, role=%s, invited_by=%s",
-		roomID, userID, newRole, invitedBy)
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		log.Printf("⚠️ SetUserRole: no rows affected (user may not exist in room)")
+		return fmt.Errorf("user %s not found in room %s", userID, roomID)
+	}
+
+	log.Printf("✅ SetUserRole: room=%s, user=%s, role=%s, invited_by=%s, rows_affected=%d",
+		roomID, userID, newRole, invitedBy, rowsAffected)
 
 	return nil
 }

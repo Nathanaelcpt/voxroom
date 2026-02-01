@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -101,9 +102,39 @@ func main() {
 // ======================
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
+	// Check database health
+	dbHealthy := true
+	dbError := ""
+	
+	if err := db.HealthCheck(); err != nil {
+		dbHealthy = false
+		dbError = err.Error()
+	}
+
+	status := "healthy"
+	httpStatus := http.StatusOK
+	
+	if !dbHealthy {
+		status = "degraded"
+		httpStatus = http.StatusServiceUnavailable
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"healthy","service":"voxroom-backend"}`))
+	w.WriteHeader(httpStatus)
+	
+	response := map[string]interface{}{
+		"status":  status,
+		"service": "voxroom-backend",
+		"database": map[string]interface{}{
+			"healthy": dbHealthy,
+		},
+	}
+	
+	if dbError != "" {
+		response["database"].(map[string]interface{})["error"] = dbError
+	}
+	
+	json.NewEncoder(w).Encode(response)
 }
 
 // handleRoomRoutes handles all /rooms/* routes with proper routing
