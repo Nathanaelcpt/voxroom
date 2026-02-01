@@ -108,8 +108,8 @@ Allow microphone access when prompted.
 
 #### 1. Clone the Repository
 
-```git clone https://github.com/Nathanaelcpt/voxroom.git``` 
-```cd voxroom```
+git clone https://github.com/Nathanaelcpt/voxroom.git
+cd voxroom
 
 #### 2. Run Backend
 cd backend
@@ -149,8 +149,8 @@ WebSocket disconnected
 
 ## 📦 Deployment Notes
 
-Frontend is deployed on Vercel
+- Frontend is deployed on Vercel
 
-Backend can be deployed on Render, Railway, or Fly.io
+- Backend can be deployed on Render, Railway, or Fly.io
 
-Make sure WebSocket support is enabled
+- Make sure WebSocket support is enabled
