@@ -1,6 +1,6 @@
 // lib/api/social.ts - Social features API
 
-import { getAccessToken } from "./auth"
+import { getSupabase } from "@/lib/supabase"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 
@@ -17,6 +17,18 @@ export interface UserProfile {
 export interface FollowStats {
   followers: number
   following: number
+}
+
+// Helper to get auth token
+async function getAccessToken(): Promise<string> {
+  const supabase = getSupabase()
+  const { data: { session } } = await supabase.auth.getSession()
+  
+  if (!session?.access_token) {
+    throw new Error("Not authenticated")
+  }
+  
+  return session.access_token
 }
 
 // Follow a user
