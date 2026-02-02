@@ -4,24 +4,41 @@ import { useEffect, useState } from "react"
 import { useUser } from "@/hooks/use-user"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Input } from "@/components/ui/input"
+import { Button } from "@/components/ui/button"
 import { UserAvatar } from "@/components/user-avatar"
 import { FollowButton } from "@/components/follow-button"
 import { Badge } from "@/components/ui/badge"
-import { Users, UserCheck, Radio } from "lucide-react"
+import { Users, UserCheck, Radio, Search, Loader2 } from "lucide-react"
 import { getFollowers, getFollowing, type UserProfile } from "@/lib/api/social"
+import { getSupabase } from "@/lib/supabase"
+
+interface SearchResult {
+  user_id: string
+  email: string
+  username?: string
+  full_name?: string
+  avatar_url?: string
+  is_following: boolean
+}
 
 export default function SocialPage() {
   const { user } = useUser()
   const [followers, setFollowers] = useState<UserProfile[]>([])
   const [following, setFollowing] = useState<UserProfile[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<"following" | "followers">("following")
+  const [activeTab, setActiveTab] = useState<"following" | "followers" | "search">("following")
+  
+  // Search state
+  const [searchQuery, setSearchQuery] = useState("")
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const [searching, setSearching] = useState(false)
 
   useEffect(() => {
     if (!user) return
 
     async function loadSocialData() {
-      if (!user) return // ✅ Extra null check
+      if (!user) return
 
       try {
         const [followersData, followingData] = await Promise.all([
@@ -40,6 +57,42 @@ export default function SocialPage() {
 
     loadSocialData()
   }, [user])
+
+  async function handleSearch(e: React.FormEvent) {
+    e.preventDefault()
+    if (!searchQuery.trim()) return
+
+    setSearching(true)
+    try {
+      const supabase = getSupabase()
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (!session?.access_token) {
+        throw new Error("Not authenticated")
+      }
+
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/users/search?q=${encodeURIComponent(searchQuery)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+          },
+        }
+      )
+
+      if (!response.ok) {
+        throw new Error("Search failed")
+      }
+
+      const data = await response.json()
+      setSearchResults(data.users || [])
+    } catch (error) {
+      console.error("Search failed:", error)
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }
 
   if (!user) {
     return (
@@ -92,24 +145,124 @@ export default function SocialPage() {
         </div>
 
         {/* Tabs */}
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "following" | "followers")}>
-          <TabsList className="grid w-full grid-cols-2">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "following" | "followers" | "search")}>
+          <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="following" className="gap-2">
               <UserCheck className="h-4 w-4" />
-              Following ({following.length})
+              Following
             </TabsTrigger>
             <TabsTrigger value="followers" className="gap-2">
               <Users className="h-4 w-4" />
-              Followers ({followers.length})
+              Followers
+            </TabsTrigger>
+            <TabsTrigger value="search" className="gap-2">
+              <Search className="h-4 w-4" />
+              Find People
             </TabsTrigger>
           </TabsList>
 
+          {/* Search Tab */}
+          <TabsContent value="search" className="space-y-4">
+            <Card>
+              <CardHeader>
+                <CardTitle>Find People</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <form onSubmit={handleSearch} className="flex gap-2">
+                  <Input
+                    placeholder="Search by username or email..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    disabled={searching}
+                  />
+                  <Button type="submit" disabled={searching || !searchQuery.trim()}>
+                    {searching ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="h-4 w-4" />
+                    )}
+                  </Button>
+                </form>
+
+                {searchResults.length > 0 ? (
+                  <div className="space-y-2">
+                    {searchResults.map((result) => {
+                      const displayName = result.full_name || result.username || result.email?.split("@")[0]
+
+                      return (
+                        <div
+                          key={result.user_id}
+                          className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted transition-colors"
+                        >
+                          <UserAvatar
+                            user={{
+                              id: result.user_id,
+                              email: result.email,
+                              user_metadata: {
+                                avatar_url: result.avatar_url,
+                                full_name: result.full_name,
+                              },
+                            }}
+                          />
+
+                          <div className="flex-1 min-w-0">
+                            <p className="font-medium truncate">{displayName}</p>
+                            {result.username && (
+                              <p className="text-sm text-muted-foreground">@{result.username}</p>
+                            )}
+                          </div>
+
+                          <FollowButton
+                            userId={result.user_id}
+                            initialIsFollowing={result.is_following}
+                            size="sm"
+                            onFollowChange={(isFollowing) => {
+                              if (isFollowing) {
+                                // Refresh following list
+                                if (!following.some((f) => f.user_id === result.user_id)) {
+                                  setFollowing([...following, {
+                                    user_id: result.user_id,
+                                    email: result.email,
+                                    username: result.username,
+                                    full_name: result.full_name,
+                                    avatar_url: result.avatar_url,
+                                    is_online: false,
+                                  }])
+                                }
+                              }
+                            }}
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : searchQuery && !searching ? (
+                  <p className="text-center text-muted-foreground py-8">
+                    No users found for "{searchQuery}"
+                  </p>
+                ) : (
+                  <p className="text-center text-muted-foreground py-8">
+                    Search for people by username or email
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* Following Tab */}
           <TabsContent value="following" className="space-y-4">
             {following.length === 0 ? (
               <Card>
                 <CardContent className="pt-6 text-center text-muted-foreground">
                   <Users className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>You're not following anyone yet</p>
+                  <Button 
+                    variant="link" 
+                    className="mt-2"
+                    onClick={() => setActiveTab("search")}
+                  >
+                    Find people to follow
+                  </Button>
                 </CardContent>
               </Card>
             ) : (
@@ -175,6 +328,7 @@ export default function SocialPage() {
             )}
           </TabsContent>
 
+          {/* Followers Tab */}
           <TabsContent value="followers" className="space-y-4">
             {followers.length === 0 ? (
               <Card>
@@ -230,12 +384,10 @@ export default function SocialPage() {
                             size="sm"
                             onFollowChange={(isFollowing) => {
                               if (isFollowing) {
-                                // Add to following list if not already there
                                 if (!following.some((f) => f.user_id === profile.user_id)) {
                                   setFollowing([...following, profile])
                                 }
                               } else {
-                                // Remove from following list
                                 setFollowing(following.filter((f) => f.user_id !== profile.user_id))
                               }
                             }}

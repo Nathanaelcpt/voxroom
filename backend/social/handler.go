@@ -378,3 +378,105 @@ func writeJSONError(w http.ResponseWriter, msg string, code int) {
 	w.WriteHeader(code)
 	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
+
+/* =======================
+   SEARCH USERS
+======================= */
+
+func SearchUsers(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		writeJSONError(w, "query parameter required", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Search by username or email (case-insensitive)
+	rows, err := db.Pool.Query(ctx, `
+		SELECT 
+			u.id,
+			u.email,
+			u.raw_user_meta_data->>'username' as username,
+			u.raw_user_meta_data->>'full_name' as full_name,
+			u.raw_user_meta_data->>'avatar_url' as avatar_url,
+			EXISTS(
+				SELECT 1 FROM follows 
+				WHERE follower_id = $1::uuid AND following_id = u.id
+			) as is_following
+		FROM auth.users u
+		WHERE u.id != $1::uuid  -- Exclude current user
+		  AND (
+			LOWER(u.email) LIKE LOWER($2) OR
+			LOWER(u.raw_user_meta_data->>'username') LIKE LOWER($2) OR
+			LOWER(u.raw_user_meta_data->>'full_name') LIKE LOWER($2)
+		  )
+		ORDER BY 
+			-- Prioritize exact matches
+			CASE 
+				WHEN LOWER(u.raw_user_meta_data->>'username') = LOWER($3) THEN 1
+				WHEN LOWER(u.email) = LOWER($3) THEN 2
+				ELSE 3
+			END,
+			u.created_at DESC
+		LIMIT 20
+	`, userID, "%"+query+"%", query)
+
+	if err != nil {
+		log.Printf("❌ Search users error: %v", err)
+		writeJSONError(w, "search failed", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var users []map[string]interface{}
+	for rows.Next() {
+		var (
+			id, email                            string
+			username, fullName, avatarURL        sql.NullString
+			isFollowing                          bool
+		)
+
+		err := rows.Scan(&id, &email, &username, &fullName, &avatarURL, &isFollowing)
+		if err != nil {
+			continue
+		}
+
+		user := map[string]interface{}{
+			"user_id":      id,
+			"email":        email,
+			"is_following": isFollowing,
+		}
+
+		if username.Valid {
+			user["username"] = username.String
+		}
+		if fullName.Valid {
+			user["full_name"] = fullName.String
+		}
+		if avatarURL.Valid {
+			user["avatar_url"] = avatarURL.String
+		}
+
+		users = append(users, user)
+	}
+
+	if users == nil {
+		users = []map[string]interface{}{}
+	}
+
+	log.Printf("🔍 User search: query=%s, found=%d", query, len(users))
+
+	writeJSON(w, map[string]interface{}{
+		"users": users,
+		"count": len(users),
+		"query": query,
+	})
+}
