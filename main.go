@@ -83,6 +83,8 @@ func main() {
 	
 	// Online friends
 	mux.HandleFunc("GET /social/online-friends", withAuth(social.GetOnlineFriends))
+	// In SOCIAL FEATURES ROUTES section
+	mux.HandleFunc("GET /users/search", withAuth(social.SearchUsers))
 
 	// ======================
 	// CORS + START SERVER
@@ -111,6 +113,7 @@ func main() {
 	log.Println("   GET  /social/{id}/followers")
 	log.Println("   GET  /social/{id}/following")
 	log.Println("   GET  /social/online-friends")
+	log.Println("   GET  /users/search")
 
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
