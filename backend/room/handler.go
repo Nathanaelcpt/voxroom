@@ -161,7 +161,7 @@ func CreateRoom(w http.ResponseWriter, r *http.Request) {
 func GetActiveRooms(w http.ResponseWriter, r *http.Request) {
 	log.Println("📋 Fetching active rooms")
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
 	// ✅ Fix: Add DISTINCT and filter ended_at IS NULL

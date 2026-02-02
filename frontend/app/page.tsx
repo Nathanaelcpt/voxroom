@@ -27,23 +27,27 @@ export default function HomePage() {
   // Load rooms
   useEffect(() => {
     async function loadRooms() {
-      try {
-        const data = await getActiveRooms()
-        setRooms(data)
-        setError(null)
-      } catch (err) {
-        console.error("Failed to load rooms:", err)
-        setError("Gagal memuat daftar room")
-        setRooms([])
-      } finally {
-        setLoading(false)
+    try {
+      const data = await getActiveRooms()
+      setRooms(data)
+      setError(null)
+    } catch (err) {
+      console.error("Failed to load rooms:", err)
+      
+      // ✅ Don't show error if we already have rooms displayed
+      if (rooms.length === 0) {
+        setError("Koneksi ke database lambat, mencoba lagi...")
       }
+      // ✅ Otherwise silently retry in background
+    } finally {
+      setLoading(false)
     }
+  }
 
     loadRooms()
 
     // Auto-refresh every 3 seconds
-    const interval = setInterval(loadRooms, 3000)
+    const interval = setInterval(loadRooms, 5000)
     return () => clearInterval(interval)
   }, [])
 
