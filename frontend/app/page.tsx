@@ -9,6 +9,7 @@ import { Radio, Users, AlertCircle } from "lucide-react"
 import { AuthDialog } from "@/components/auth-dialog"
 import { OnlineFriendsSidebar } from "@/components/online-friends-sidebar"
 import { useUser } from "@/hooks/use-user"
+import { usePresence } from "@/hooks/use-presence"
 import { getActiveRooms, joinRoom as joinRoomAPI } from "@/lib/api/rooms"
 import type { Room } from "@/app/types/room"
 
@@ -19,6 +20,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
+
+  // ✅ Track presence - updates user as "online" when on homepage
+  usePresence()
 
   // Load rooms
   useEffect(() => {

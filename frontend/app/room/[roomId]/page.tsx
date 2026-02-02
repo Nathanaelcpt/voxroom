@@ -17,6 +17,7 @@ import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
+import { usePresence } from "@/hooks/use-presence"
 
 export default function RoomPage() {
   const params = useParams()
@@ -24,6 +25,7 @@ export default function RoomPage() {
   const { user } = useUser()
 
   const roomId = params?.roomId as string | undefined
+  usePresence({ roomId: roomId || undefined })
 
   const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
