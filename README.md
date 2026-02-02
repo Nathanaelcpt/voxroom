@@ -1,6 +1,6 @@
-# Voxroom
+# VoxRoom
 
-Voxroom is a real-time voice room web application that allows users to create and join voice chat rooms directly from the browser.
+VoxRoom is a real-time voice room web application that allows users to create and join voice chat rooms directly from the browser.
 
 The app is built with a **Go backend** and a **TypeScript frontend**, using WebSocket for real-time communication and Supabase for authentication.
 
