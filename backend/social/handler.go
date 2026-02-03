@@ -138,7 +138,6 @@ func UnfollowUser(w http.ResponseWriter, r *http.Request) {
 ======================= */
 
 func GetFollowers(w http.ResponseWriter, r *http.Request) {
-	// Extract user ID from path: /social/{id}/followers
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/social/"), "/")
 	if len(parts) < 2 {
 		writeJSONError(w, "invalid path", http.StatusBadRequest)
@@ -149,17 +148,18 @@ func GetFollowers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// ✅ FIXED: Use public.users
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
 			u.id,
 			u.email,
-			u.raw_user_meta_data->>'username' as username,
-			u.raw_user_meta_data->>'full_name' as full_name,
-			u.raw_user_meta_data->>'avatar_url' as avatar_url,
+			u.username,
+			u.display_name,
+			u.avatar_url,
 			COALESCE(up.status = 'online', false) as is_online
-		FROM follows f
-		JOIN auth.users u ON f.follower_id = u.id
-		LEFT JOIN user_presence up ON u.id = up.user_id
+		FROM public.follows f
+		JOIN public.users u ON f.follower_id = u.id
+		LEFT JOIN public.user_presence up ON u.id = up.user_id
 		WHERE f.following_id = $1::uuid
 		ORDER BY f.created_at DESC
 		LIMIT 100
@@ -206,7 +206,6 @@ func GetFollowers(w http.ResponseWriter, r *http.Request) {
 ======================= */
 
 func GetFollowing(w http.ResponseWriter, r *http.Request) {
-	// Extract user ID from path: /social/{id}/following
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/social/"), "/")
 	if len(parts) < 2 {
 		writeJSONError(w, "invalid path", http.StatusBadRequest)
@@ -217,18 +216,19 @@ func GetFollowing(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// ✅ FIXED: Use public.users
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
 			u.id,
 			u.email,
-			u.raw_user_meta_data->>'username' as username,
-			u.raw_user_meta_data->>'full_name' as full_name,
-			u.raw_user_meta_data->>'avatar_url' as avatar_url,
+			u.username,
+			u.display_name,
+			u.avatar_url,
 			COALESCE(up.status = 'online', false) as is_online,
 			up.current_room_id
-		FROM follows f
-		JOIN auth.users u ON f.following_id = u.id
-		LEFT JOIN user_presence up ON u.id = up.user_id
+		FROM public.follows f
+		JOIN public.users u ON f.following_id = u.id
+		LEFT JOIN public.user_presence up ON u.id = up.user_id
 		WHERE f.follower_id = $1::uuid
 		ORDER BY f.created_at DESC
 		LIMIT 100
@@ -287,16 +287,17 @@ func GetOnlineFriends(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// ✅ FIXED: Use public.users
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
 			u.id,
-			u.raw_user_meta_data->>'username' as username,
-			u.raw_user_meta_data->>'full_name' as full_name,
-			u.raw_user_meta_data->>'avatar_url' as avatar_url,
+			u.username,
+			u.display_name,
+			u.avatar_url,
 			up.current_room_id
-		FROM follows f
-		JOIN auth.users u ON f.following_id = u.id
-		JOIN user_presence up ON u.id = up.user_id
+		FROM public.follows f
+		JOIN public.users u ON f.following_id = u.id
+		JOIN public.user_presence up ON u.id = up.user_id
 		WHERE f.follower_id = $1::uuid 
 		  AND up.status = 'online'
 		  AND up.last_seen > NOW() - INTERVAL '5 minutes'
@@ -399,29 +400,28 @@ func SearchUsers(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	// Search by username or email (case-insensitive)
+	// ✅ FIXED: Use public.users
 	rows, err := db.Pool.Query(ctx, `
 		SELECT 
 			u.id,
 			u.email,
-			u.raw_user_meta_data->>'username' as username,
-			u.raw_user_meta_data->>'full_name' as full_name,
-			u.raw_user_meta_data->>'avatar_url' as avatar_url,
+			u.username,
+			u.display_name,
+			u.avatar_url,
 			EXISTS(
-				SELECT 1 FROM follows 
+				SELECT 1 FROM public.follows 
 				WHERE follower_id = $1::uuid AND following_id = u.id
 			) as is_following
-		FROM auth.users u
-		WHERE u.id != $1::uuid  -- Exclude current user
+		FROM public.users u
+		WHERE u.id != $1::uuid
 		  AND (
 			LOWER(u.email) LIKE LOWER($2) OR
-			LOWER(u.raw_user_meta_data->>'username') LIKE LOWER($2) OR
-			LOWER(u.raw_user_meta_data->>'full_name') LIKE LOWER($2)
+			LOWER(u.username) LIKE LOWER($2) OR
+			LOWER(u.display_name) LIKE LOWER($2)
 		  )
 		ORDER BY 
-			-- Prioritize exact matches
 			CASE 
-				WHEN LOWER(u.raw_user_meta_data->>'username') = LOWER($3) THEN 1
+				WHEN LOWER(u.username) = LOWER($3) THEN 1
 				WHEN LOWER(u.email) = LOWER($3) THEN 2
 				ELSE 3
 			END,

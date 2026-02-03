@@ -554,22 +554,25 @@ func GetParticipantsWithProfiles(roomID string) ([]ParticipantWithProfile, error
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// ✅ FIX: Use public.users instead of auth.users
 	query := `
 		SELECT 
 			rp.user_id,
-			rp.role,
+			rp.role::text,
 			u.email,
-			u.raw_user_meta_data->>'full_name' as full_name,
-			u.raw_user_meta_data->>'avatar_url' as avatar_url
-		FROM room_participants rp
-		LEFT JOIN auth.users u ON rp.user_id = u.id
+			u.username,
+			u.display_name,
+			u.avatar_url
+		FROM public.room_participants rp
+		LEFT JOIN public.users u ON rp.user_id = u.id
 		WHERE rp.room_id = $1::uuid AND rp.left_at IS NULL
 		ORDER BY 
-			CASE rp.role 
+			CASE rp.role::text
 				WHEN 'host' THEN 1
 				WHEN 'speaker' THEN 2
 				WHEN 'listener' THEN 3
-			END
+			END,
+			rp.joined_at ASC
 	`
 	
 	rows, err := db.Pool.Query(ctx, query, roomID)
@@ -583,9 +586,9 @@ func GetParticipantsWithProfiles(roomID string) ([]ParticipantWithProfile, error
 	
 	for rows.Next() {
 		var p ParticipantWithProfile
-		var email, fullName, avatarURL sql.NullString
+		var email, username, displayName, avatarURL sql.NullString
 		
-		err := rows.Scan(&p.UserID, &p.Role, &email, &fullName, &avatarURL)
+		err := rows.Scan(&p.UserID, &p.Role, &email, &username, &displayName, &avatarURL)
 		if err != nil {
 			log.Printf("⚠️ Error scanning participant: %v", err)
 			continue
@@ -593,12 +596,17 @@ func GetParticipantsWithProfiles(roomID string) ([]ParticipantWithProfile, error
 		
 		if email.Valid {
 			p.Email = email.String
-			// Extract username from email
+		}
+		
+		if username.Valid {
+			p.Username = username.String
+		} else if email.Valid {
+			// Fallback: extract from email if username not set
 			p.Username = strings.Split(email.String, "@")[0]
 		}
 		
-		if fullName.Valid {
-			p.FullName = fullName.String
+		if displayName.Valid {
+			p.FullName = displayName.String
 		}
 		
 		if avatarURL.Valid {
