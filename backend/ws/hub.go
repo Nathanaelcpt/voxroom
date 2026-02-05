@@ -1,4 +1,4 @@
-// backend/ws/hub.go - FINAL
+// backend/ws/hub.go - FINAL STABLE
 package ws
 
 import (
@@ -10,7 +10,8 @@ import (
 	"voxroom/backend/room"
 )
 
-// Hub manages active websocket clients per room
+/* ================= HUB ================= */
+
 type Hub struct {
 	Rooms      map[string]map[*Client]bool
 	Register   chan *Client
@@ -26,6 +27,8 @@ func NewHub() *Hub {
 		Broadcast:  make(chan Message, 256),
 	}
 }
+
+/* ================= RUN ================= */
 
 func (h *Hub) Run() {
 	for {
@@ -45,7 +48,7 @@ func (h *Hub) Run() {
 /* ================= REGISTER ================= */
 
 func (h *Hub) handleRegister(client *Client) {
-	// 🔑 ROLE SOURCE OF TRUTH
+	// Ambil role dari DB (authoritative)
 	role, canSpeak := room.GetUserRoleInRoom(client.RoomID, client.UserID)
 	client.Role = string(role)
 	client.CanSpeak = canSpeak
@@ -57,33 +60,31 @@ func (h *Hub) handleRegister(client *Client) {
 
 	h.Rooms[client.RoomID][client] = true
 
-	log.Printf("✅ WS join: user=%s role=%s room=%s total=%d",
+	log.Printf(
+		"✅ Client joined room=%s user=%s role=%s",
+		client.RoomID,
 		client.UserID,
 		client.Role,
-		client.RoomID,
-		len(h.Rooms[client.RoomID]),
 	)
 
 	// Presence online
 	go h.updatePresence(client.UserID, "online", &client.RoomID)
 
-	// 🔔 USER JOINED EVENT
+	// 🔔 user_joined
 	h.broadcastToRoom(client.RoomID, Message{
 		Type:   "user_joined",
 		RoomID: client.RoomID,
-		From:   client.UserID,
 		Data: map[string]interface{}{
 			"user_id":  client.UserID,
 			"username": client.Username,
 			"role":     client.Role,
-			"can_speak": client.CanSpeak,
 		},
 	}, nil)
 
-	// Kirim state room ke client baru
+	// Kirim state awal ke client
 	h.sendRoomState(client)
 
-	// Update listener count
+	// Update count
 	h.broadcastListenerCount(client.RoomID)
 }
 
@@ -102,19 +103,14 @@ func (h *Hub) handleUnregister(client *Client) {
 	delete(clients, client)
 	close(client.Send)
 
-	log.Printf("❌ WS leave: user=%s room=%s remaining=%d",
-		client.UserID,
-		client.RoomID,
-		len(clients),
-	)
+	log.Printf("👋 Client left room=%s user=%s", client.RoomID, client.UserID)
 
 	go h.updatePresence(client.UserID, "offline", nil)
 
-	// 🔔 USER LEFT EVENT
+	// 🔔 user_left
 	h.broadcastToRoom(client.RoomID, Message{
 		Type:   "user_left",
 		RoomID: client.RoomID,
-		From:   client.UserID,
 		Data: map[string]interface{}{
 			"user_id":  client.UserID,
 			"username": client.Username,
@@ -133,11 +129,6 @@ func (h *Hub) handleUnregister(client *Client) {
 /* ================= BROADCAST ================= */
 
 func (h *Hub) handleBroadcast(msg Message) {
-	if msg.RoomID == "" {
-		log.Println("⚠️ WS broadcast missing room_id")
-		return
-	}
-
 	clients, ok := h.Rooms[msg.RoomID]
 	if !ok {
 		return
@@ -145,12 +136,18 @@ func (h *Hub) handleBroadcast(msg Message) {
 
 	switch msg.Type {
 
-	// 💬 CHAT (pakai Data)
+	// 💬 CHAT → ke semua (TERMASUK sender)
 	case "chat":
-		h.broadcastToRoom(msg.RoomID, msg, nil)
-		log.Printf("💬 Chat: room=%s from=%s", msg.RoomID, msg.From)
+		for c := range clients {
+			select {
+			case c.Send <- msg:
+			default:
+				close(c.Send)
+				delete(clients, c)
+			}
+		}
 
-	// 🔊 AUDIO (pakai Payload)
+	// 🔊 AUDIO → ke semua KECUALI sender
 	case "audio":
 		for c := range clients {
 			if c.UserID == msg.From {
@@ -164,85 +161,65 @@ func (h *Hub) handleBroadcast(msg Message) {
 			}
 		}
 
-	// 🎙️ MIC / SPEAKING
-	case "mic_on", "mic_off", "speaking":
-		h.broadcastToRoom(msg.RoomID, msg, nil)
-
-	// 🔁 ROLE UPDATED (trigger dari REST API)
-	case "role_updated":
-		h.handleRoleUpdated(msg)
-
+	// 🔔 EVENT / ROLE / MIC
 	default:
-		h.broadcastToRoom(msg.RoomID, msg, nil)
-	}
-}
-
-/* ================= ROLE UPDATE ================= */
-
-func (h *Hub) handleRoleUpdated(msg Message) {
-	roomID := msg.RoomID
-
-	clients, ok := h.Rooms[roomID]
-	if !ok {
-		return
-	}
-
-	userID, _ := msg.Data["user_id"].(string)
-	newRole, _ := msg.Data["role"].(string)
-
-	for c := range clients {
-		if c.UserID == userID {
-			c.Role = newRole
-			c.CanSpeak = newRole == "host" || newRole == "speaker"
+		for c := range clients {
+			select {
+			case c.Send <- msg:
+			default:
+				close(c.Send)
+				delete(clients, c)
+			}
 		}
 	}
-
-	h.broadcastToRoom(roomID, msg, nil)
 }
 
 /* ================= HELPERS ================= */
 
 func (h *Hub) broadcastToRoom(roomID string, msg Message, exclude *Client) {
-	clients := h.Rooms[roomID]
+	clients, ok := h.Rooms[roomID]
+	if !ok {
+		return
+	}
 
 	for c := range clients {
 		if exclude != nil && c == exclude {
 			continue
 		}
-		select {
-		case c.Send <- msg:
-		default:
-			close(c.Send)
-			delete(clients, c)
-		}
+		c.Send <- msg
 	}
 }
 
 func (h *Hub) broadcastListenerCount(roomID string) {
-	clients := h.Rooms[roomID]
-	count := len(clients)
+	clients, ok := h.Rooms[roomID]
+	if !ok {
+		return
+	}
 
 	h.broadcastToRoom(roomID, Message{
 		Type:   "listener_count",
 		RoomID: roomID,
 		Data: map[string]interface{}{
-			"count": count,
+			"count": len(clients),
 		},
 	}, nil)
 }
 
 func (h *Hub) sendRoomState(client *Client) {
-	clients := h.Rooms[client.RoomID]
+	clients, ok := h.Rooms[client.RoomID]
+	if !ok {
+		return
+	}
 
-	var list []map[string]interface{}
+	var participants []map[string]interface{}
 	for c := range clients {
 		if c.UserID == client.UserID {
 			continue
 		}
-		list = append(list, map[string]interface{}{
-			"user_id":   c.UserID,
-			"username":  c.Username,
-			"role":      c.Role,
+		participants = append(participants, map[string]interface{}{
+			"user_id":  c.UserID,
+			"username": c.Username,
+			"role":     c.Role,
 			"can_speak": c.CanSpeak,
 		})
 	}
@@ -251,7 +228,7 @@ func (h *Hub) sendRoomState(client *Client) {
 		Type:   "room_state",
 		RoomID: client.RoomID,
 		Data: map[string]interface{}{
-			"participants": list,
+			"participants": participants,
 			"total":        len(clients),
 		},
 	}
@@ -264,19 +241,16 @@ func (h *Hub) updatePresence(userID, status string, roomID *string) {
 	defer cancel()
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO public.user_presence
-			(user_id, status, current_room_id, last_seen, updated_at)
-		VALUES
-			($1::uuid, $2, $3, NOW(), NOW())
+		INSERT INTO public.user_presence (user_id, status, current_room_id, updated_at)
+		VALUES ($1::uuid, $2, $3, NOW())
 		ON CONFLICT (user_id)
 		DO UPDATE SET
 			status = EXCLUDED.status,
 			current_room_id = EXCLUDED.current_room_id,
-			last_seen = NOW(),
 			updated_at = NOW()
 	`, userID, status, roomID)
 
 	if err != nil {
-		log.Printf("⚠️ Presence update failed: %v", err)
+		log.Printf("⚠️ Presence update failed user=%s err=%v", userID, err)
 	}
 }

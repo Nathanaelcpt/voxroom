@@ -1,4 +1,3 @@
-// app/types/websocket.ts - UPDATED with Chat Types
 export type WSMessageType =
   | "audio"
   | "mic_on"
@@ -9,30 +8,45 @@ export type WSMessageType =
   | "listener_count"
   | "room_state"
   | "room_ended"
-  | "user_joined"      // ✅ NEW
-  | "user_left"        // ✅ NEW
-  | "chat"             // ✅ NEW
-  | "speaker_invited"  // ✅ NEW (optional, for future use)
+  | "user_joined"
+  | "user_left"
+  | "chat"
+  | "speaker_invited"
 
 export interface WSMessage {
   type: WSMessageType
+
+  /** metadata */
+  from?: string
+  room_id?: string
+
+  /** 🔊 AUDIO STREAM (binary / chunk) */
   payload?: {
-    // Audio
     chunk?: string
-    
-    // Role management
-    role?: "host" | "speaker" | "listener"
+    [key: string]: any
+  }
+
+  /** 💬 CHAT / EVENT / ROLE / PRESENCE */
+  data?: {
+    // common
     user_id?: string
     username?: string
-    can_speak?: boolean
-    
-    // Speaking status
+    role?: "host" | "speaker" | "listener"
+    avatar_url?: string
+
+    // chat
+    content?: string
+    message_id?: string
+    timestamp?: string | number
+
+    // speaking / mic
     is_speaking?: boolean
-    
-    // Listener count
+    can_speak?: boolean
+
+    // listener count
     count?: number
-    
-    // Room state
+
+    // room state
     participants?: Array<{
       user_id: string
       username?: string
@@ -40,19 +54,10 @@ export interface WSMessage {
       can_speak: boolean
     }>
     total?: number
-    
-    // ✅ NEW: Chat message
-    content?: string
-    avatar_url?: string
-    message_id?: string
-    timestamp?: string | number
-    
-    // ✅ NEW: Join/Leave events
+
+    // events
     event_type?: "join" | "leave" | "speaker_invited" | "mic_on" | "mic_off"
-    
-    // Any other data
+
     [key: string]: any
   }
-  from?: string
-  room_id?: string
 }

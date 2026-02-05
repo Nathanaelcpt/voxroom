@@ -1,16 +1,15 @@
 package ws
 
-// Message represents a WebSocket message
 type Message struct {
-	Type   string                 `json:"type"`
-	RoomID string                 `json:"room_id,omitempty"`
-	From   string                 `json:"from,omitempty"`
-	
-	// ✅ KHUSUS AUDIO / BINARY
-	Payload interface{}            `json:"payload,omitempty"`
+	Type   string `json:"type"`
+	RoomID string `json:"room_id,omitempty"`
+	From   string `json:"from,omitempty"`
 
-	// ✅ KHUSUS CHAT / EVENT
-	Data    map[string]interface{} `json:"data,omitempty"`
+	// 🔊 Audio / binary
+	Payload map[string]interface{} `json:"payload,omitempty"`
+
+	// 💬 Chat / event / ui
+	Data map[string]interface{} `json:"data,omitempty"`
 }
 
 // Message types
