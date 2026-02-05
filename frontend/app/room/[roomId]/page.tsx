@@ -35,24 +35,15 @@ import type { ChatMessage } from "@/app/types/chat"
 import { usePresence } from "@/hooks/use-presence"
 
 export default function RoomPage() {
+  /* ================= BASIC ================= */
   const params = useParams()
   const router = useRouter()
   const { user } = useUser()
-
   const roomId = params?.roomId as string | undefined
+
   usePresence({ roomId })
 
-  if (!roomId || !user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    )
-  }
-
-  const safeRoomId = roomId
-  const safeUser = user
-
+  /* ================= STATE ================= */
   const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [participantCount, setParticipantCount] = useState(0)
@@ -72,9 +63,16 @@ export default function RoomPage() {
     ((userId: string, audioData: ArrayBuffer) => void) | null
   >(null)
 
-  /* LOAD ROOM */
+  /* ================= LOAD ROOM ================= */
   useEffect(() => {
-    async function loadRoom() {
+  if (!roomId || !user) return
+
+  // 🔒 KUNCI: salin ke const lokal
+  const safeRoomId = roomId
+  const safeUser = user
+
+  async function loadRoom() {
+    try {
       const data = await getRoomDetails(safeRoomId)
       setRoom(data)
 
@@ -88,33 +86,35 @@ export default function RoomPage() {
       if (me) setMyRole(me.role)
 
       setRoomLoaded(true)
+    } catch (err) {
+      console.error("Failed to load room:", err)
+      router.push("/")
     }
+  }
 
-    loadRoom().catch(() => router.push("/"))
-  }, [safeRoomId, safeUser.id, router])
+  loadRoom()
+}, [roomId, user, router])
 
-  /* WEBSOCKET */
+
+  /* ================= WEBSOCKET ================= */
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
+      if (!user) return
       const payload = message.payload
       if (!payload) return
 
-      switch (message.type) {
-        case "chat": {
-        if (payload.user_id === safeUser.id) return
+      if (message.type === "chat") {
+        if (payload.user_id === user.id) return
 
         const content =
-          typeof payload.content === "string"
-            ? payload.content
-            : ""
-
+          typeof payload.content === "string" ? payload.content : ""
         if (!content) return
 
         const chat: ChatMessage = {
           id: payload.message_id ?? crypto.randomUUID(),
           type: "chat",
           username: payload.username ?? "User",
-          content, // ✅ SEKARANG STRING PASTI
+          content,
           timestamp: new Date(payload.timestamp ?? Date.now()),
           avatar_url: payload.avatar_url,
           role: (payload.role as Role) ?? "listener",
@@ -122,19 +122,17 @@ export default function RoomPage() {
         }
 
         setChatMessages((prev) => [...prev, chat])
-        break
-      }
-
       }
     },
-    [safeUser.id]
+    [user]
   )
 
   const { isConnected, send, sendAudioChunk } = useWebSocket({
-    roomId: roomLoaded ? safeRoomId : "",
+    roomId: roomLoaded && roomId ? roomId : "",
     onMessage: handleWSMessage,
   })
 
+  /* ================= AUDIO ================= */
   const {
     isCapturing,
     mediaStream,
@@ -153,6 +151,7 @@ export default function RoomPage() {
     playAudioChunkRef.current = playAudioChunk
   }, [playAudioChunk])
 
+  /* ================= ACTIONS ================= */
   function handleToggleMic() {
     if (!canSpeak) return
     const next = !isMuted
@@ -161,19 +160,27 @@ export default function RoomPage() {
   }
 
   async function handleMakeSpeaker(userId: string) {
-    if (!isHost) return
-    await makeSpeaker(safeRoomId, userId)
+    if (!isHost || !roomId) return
+    await makeSpeaker(roomId, userId)
   }
 
   async function handleEndRoom() {
-    if (!isHost) return
+    if (!isHost || !roomId) return
     if (!confirm("Yakin ingin mengakhiri room?")) return
-    await endRoom(safeRoomId)
+    await endRoom(roomId)
     router.push("/")
   }
 
-  if (!room) return null
+  /* ================= RENDER GUARD (AMAN) ================= */
+  if (!roomId || !user || !room) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
+  }
 
+  /* ================= UI ================= */
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -257,7 +264,7 @@ export default function RoomPage() {
               <CardTitle>Live Stage</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6 text-center">
-              <UserAvatar user={safeUser} size="lg" />
+              <UserAvatar user={user} size="lg" />
               <Badge>{myRole}</Badge>
 
               {canSpeak && (
@@ -274,8 +281,8 @@ export default function RoomPage() {
 
           {/* CHAT */}
           <LiveChat
-            roomId={safeRoomId}
-            currentUserId={safeUser.id}
+            roomId={roomId}
+            currentUserId={user.id}
             messages={chatMessages}
             participantCount={participantCount}
             isHost={isHost}
@@ -290,24 +297,24 @@ export default function RoomPage() {
                   id: crypto.randomUUID(),
                   type: "chat",
                   username:
-                    safeUser.user_metadata?.full_name ||
-                    safeUser.email?.split("@")[0] ||
+                    user.user_metadata?.full_name ||
+                    user.email?.split("@")[0] ||
                     "User",
                   content: text,
                   timestamp: new Date(),
-                  avatar_url: safeUser.user_metadata?.avatar_url,
+                  avatar_url: user.user_metadata?.avatar_url,
                   role: myRole,
-                  user_id: safeUser.id,
+                  user_id: user.id,
                 },
               ])
 
               send("chat", {
                 content: text,
                 username:
-                  safeUser.user_metadata?.full_name ||
-                  safeUser.email?.split("@")[0] ||
+                  user.user_metadata?.full_name ||
+                  user.email?.split("@")[0] ||
                   "User",
-                avatar_url: safeUser.user_metadata?.avatar_url,
+                avatar_url: user.user_metadata?.avatar_url,
                 role: myRole,
               })
             }}
@@ -319,7 +326,7 @@ export default function RoomPage() {
         <InviteFriendsModal
           open={showInviteModal}
           onClose={() => setShowInviteModal(false)}
-          roomId={safeRoomId}
+          roomId={roomId}
           roomTitle={room.title}
           onInvite={async () => {}}
         />
