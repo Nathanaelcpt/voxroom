@@ -21,167 +21,112 @@ export default function GoLiveSetupPage() {
   const [loading, setLoading] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
 
-  // Auto-start mic test when device selected
   useEffect(() => {
     if (!selectedMicId) return
 
+    let activeStream: MediaStream | null = null
+
     async function startTest() {
       try {
-        // Stop previous stream if exists
         if (testStream) {
-          testStream.getTracks().forEach(track => track.stop())
+          testStream.getTracks().forEach(t => t.stop())
         }
 
-        // Start new stream with selected device
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            deviceId: selectedMicId ? { exact: selectedMicId } : undefined,
+            deviceId: { exact: selectedMicId },
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true,
-            sampleRate: 48000,
           },
         })
 
+        activeStream = stream
         setTestStream(stream)
         setIsTesting(true)
         setPermissionError(null)
-
-        console.log("🎤 Testing mic:", selectedMicId)
       } catch (err) {
-        console.error("Failed to start mic test:", err)
-        setPermissionError("Gagal mengakses microphone. Periksa izin browser.")
-        setTestStream(null)
+        console.error(err)
+        setPermissionError("Gagal mengakses microphone.")
         setIsTesting(false)
       }
     }
 
     startTest()
 
-    // Cleanup on unmount or device change
     return () => {
-      if (testStream) {
-        testStream.getTracks().forEach(track => track.stop())
-      }
+      activeStream?.getTracks().forEach(t => t.stop())
     }
   }, [selectedMicId])
 
   async function handleGoLive() {
-    // Validation
-    if (!title.trim()) {
-      alert("Judul room wajib diisi")
-      return
-    }
-
-    if (!selectedMicId) {
-      alert("Microphone belum dipilih")
-      return
-    }
-
+    if (!title.trim() || !selectedMicId) return
     setLoading(true)
 
     try {
-      // Stop test stream before going live
+      // 🔥 HARD RELEASE MIC (REALTEK FIX)
       if (testStream) {
-        testStream.getTracks().forEach(track => track.stop())
+        testStream.getTracks().forEach(t => t.stop())
         setTestStream(null)
       }
 
+      // Force browser to release audio device
+      await navigator.mediaDevices
+        .getUserMedia({ audio: false })
+        .catch(() => {})
+
       const data: CreateRoomRequest = { title: title.trim() }
-      const response = await createRoom(data)
+      const res = await createRoom(data)
 
-      console.log("✅ Room created:", response.room_id)
-      console.log("🎤 Selected mic:", selectedMicId)
-
-      // Store selected mic in localStorage for room page
       localStorage.setItem("selectedMicId", selectedMicId)
-
-      // Navigate to room
-      router.push(`/room/${response.room_id}`)
+      router.push(`/room/${res.room_id}`)
     } catch (err) {
-      console.error("Failed to create room:", err)
-      alert(
-        err instanceof Error
-          ? err.message
-          : "Terjadi kesalahan saat membuat room"
-      )
+      alert("Gagal membuat room")
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-6">
+    <div className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Mic className="h-5 w-5" />
-            Setup Audio Streaming
+            Setup Audio
           </CardTitle>
         </CardHeader>
 
         <CardContent className="space-y-6">
-          {/* Permission Error */}
           {permissionError && (
-            <div className="flex items-start gap-2 rounded-lg border border-destructive bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-              <p>{permissionError}</p>
+            <div className="flex gap-2 text-sm text-red-600">
+              <AlertCircle className="h-4 w-4" />
+              {permissionError}
             </div>
           )}
 
-          {/* Room Title */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Judul Room</label>
-            <Input
-              placeholder="Contoh: Podcast Malam Jumat"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              disabled={loading}
-              maxLength={100}
-            />
-            <p className="text-xs text-muted-foreground">
-              {title.length}/100 karakter
-            </p>
-          </div>
-
-          {/* Audio Device Selector */}
-          <AudioDeviceSelector
-            onInputDeviceChange={(deviceId) => {
-              setSelectedMicId(deviceId)
-              console.log("🎤 Mic selected:", deviceId)
-            }}
-            showOutput={false}
+          <Input
+            placeholder="Judul Room"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
           />
 
-          {/* Audio Meter (Live Test) */}
-          {isTesting && (
-            <AudioMeter
-              stream={testStream}
-              label="Microphone Test"
-              showDeviceInfo={true}
-            />
+          <AudioDeviceSelector
+            showOutput={false}
+            onInputDeviceChange={setSelectedMicId}
+          />
+
+          {isTesting && testStream && (
+            <AudioMeter stream={testStream} label="Mic Test" />
           )}
 
-          {/* Go Live Button */}
           <Button
             className="w-full"
-            size="lg"
-            disabled={loading || !title.trim() || !selectedMicId}
+            disabled={!title || !selectedMicId || loading}
             onClick={handleGoLive}
           >
-            {loading ? "Creating Room..." : "Go Live 🎙️"}
+            {loading ? "Creating..." : "Go Live 🎙️"}
           </Button>
-
-          {/* Info */}
-          <div className="rounded-lg bg-muted p-3 text-xs text-muted-foreground">
-            <p className="font-medium mb-1">ℹ️ Tips:</p>
-            <ul className="space-y-1 list-disc list-inside">
-              <li>Test mic kamu dulu sebelum go live</li>
-              <li>Level audio ideal: 50-80%</li>
-              <li>Hindari background noise yang berlebihan</li>
-              <li>Gunakan headset untuk audio lebih baik</li>
-            </ul>
-          </div>
         </CardContent>
       </Card>
     </div>
