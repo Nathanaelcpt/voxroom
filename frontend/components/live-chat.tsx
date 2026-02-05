@@ -4,14 +4,22 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
+import { UserAvatar } from "@/components/user-avatar"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Send, Users, MessageSquare, MoreVertical, Mic } from "lucide-react"
+import {
+  Send,
+  Users,
+  MessageSquare,
+  MoreVertical,
+  Mic,
+} from "lucide-react"
 import type { ChatMessage } from "@/app/types/chat"
+import { cn } from "@/lib/utils"
 
 interface LiveChatProps {
   roomId: string
@@ -21,6 +29,18 @@ interface LiveChatProps {
   isHost?: boolean
   onSendMessage: (message: string) => void
   onMakeSpeaker?: (userId: string) => void
+}
+
+const roleColor = {
+  host: "text-yellow-500",
+  speaker: "text-blue-500",
+  listener: "text-muted-foreground",
+}
+
+const roleIcon = {
+  host: "👑",
+  speaker: "🎤",
+  listener: "👂",
 }
 
 export function LiveChat({
@@ -63,13 +83,14 @@ export function LiveChat({
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {messages.map((msg) => {
-            if (msg.type === "event" || msg.type === "system") {
+            // system / event
+            if (msg.type !== "chat") {
               return (
                 <div
                   key={msg.id}
                   className="text-center text-xs text-muted-foreground"
                 >
-                  {msg.content}
+                  {msg.content || msg.event_type}
                 </div>
               )
             }
@@ -78,15 +99,45 @@ export function LiveChat({
             const isListener = msg.role === "listener"
 
             return (
-              <div key={msg.id} className="flex gap-2 group">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="font-medium">{msg.username}</span>
+              <div
+                key={msg.id}
+                className="flex items-start gap-2 group"
+              >
+                {/* Avatar */}
+                <UserAvatar
+                  user={{
+                    id: msg.user_id || msg.id,
+                    email: "",
+                    user_metadata: {
+                      avatar_url: msg.avatar_url,
+                      full_name: msg.username,
+                    },
+                  }}
+                  size="sm"
+                />
+
+                <div className="flex-1 min-w-0">
+                  {/* Username + Role */}
+                  <div className="flex items-center gap-1 text-xs">
+                    <span
+                      className={cn(
+                        "font-semibold truncate",
+                        msg.role && roleColor[msg.role]
+                      )}
+                    >
+                      {msg.username}
+                    </span>
                     {msg.role && (
-                      <span className="opacity-60">({msg.role})</span>
+                      <span className="opacity-60">
+                        {roleIcon[msg.role]}
+                      </span>
                     )}
                   </div>
-                  <div className="text-sm">{msg.content}</div>
+
+                  {/* Message */}
+                  <div className="text-sm wrap-break-word">
+                    {msg.content}
+                  </div>
                 </div>
 
                 {/* Host menu */}
@@ -101,10 +152,10 @@ export function LiveChat({
                         <MoreVertical className="h-3 w-3" />
                       </Button>
                     </DropdownMenuTrigger>
-                    <DropdownMenuContent>
+                    <DropdownMenuContent align="end">
                       <DropdownMenuItem
                         onClick={() => onMakeSpeaker(msg.user_id!)}
-                        className="text-xs gap-2"
+                        className="gap-2 text-xs"
                       >
                         <Mic className="h-3 w-3" />
                         Jadikan Speaker
@@ -118,7 +169,7 @@ export function LiveChat({
           <div ref={endRef} />
         </div>
 
-        {/* Input (SEMUA ROLE BOLEH CHAT) */}
+        {/* Input */}
         <div className="border-t p-3">
           <div className="flex gap-2">
             <Input

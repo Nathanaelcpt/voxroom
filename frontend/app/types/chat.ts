@@ -4,6 +4,7 @@ export interface ChatMessage {
   username: string
   content: string
   timestamp: Date
+  avatar_url?: string
   role?: "host" | "speaker" | "listener"
   user_id?: string
   event_type?:
