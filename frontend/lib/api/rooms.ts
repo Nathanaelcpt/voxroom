@@ -8,6 +8,7 @@ import type {
   JoinRoomResponse,
 } from "@/app/types/room"
 import { getAccessToken } from "@/lib/auth"
+import { getSupabase } from "@/lib/supabase"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL
 
@@ -71,7 +72,7 @@ export async function createRoom(
  */
 // lib/api/rooms.ts - UPDATE joinRoom function
 
-export async function joinRoom(
+/*export async function joinRoom(
   roomId: string, 
   preferredRole?: "speaker" | "listener"  // ✅ ADD THIS
 ): Promise<JoinRoomResponse> {
@@ -98,7 +99,59 @@ export async function joinRoom(
   }
 
   return res.json()
+}*/
+
+export async function joinRoom(roomId: string, as: "speaker" | "listener" = "listener") {
+  const supabase = getSupabase()
+  const { data: { session } } = await supabase.auth.getSession()
+
+  if (!session?.access_token) {
+    throw new Error("Not authenticated")
+  }
+
+  const response = await fetch(`${API_URL}/rooms/${roomId}/join?as=${as}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${session.access_token}`,
+    },
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || "Failed to join room")
+  }
+
+  return response.json()
 }
+
+// ================================
+// ADD makeSpeaker FUNCTION (NEW)
+// ================================
+export async function makeSpeaker(roomId: string, userId: string) {
+  const supabase = getSupabase()
+  const { data: { session } } = await supabase.auth.getSession()
+
+  if (!session?.access_token) {
+    throw new Error("Not authenticated")
+  }
+
+  const response = await fetch(`${API_URL}/rooms/${roomId}/make-speaker`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ user_id: userId }),
+  })
+
+  if (!response.ok) {
+    const error = await response.json()
+    throw new Error(error.error || "Failed to promote user")
+  }
+
+  return response.json()
+}
+
 
 /**
  * End a room (host only)

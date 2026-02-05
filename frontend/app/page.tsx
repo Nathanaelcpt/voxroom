@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Radio, Users, AlertCircle } from "lucide-react"
 import { AuthDialog } from "@/components/auth-dialog"
 import { OnlineFriendsSidebar } from "@/components/online-friends-sidebar"
-import { JoinRoomModal } from "@/components/join-room-modal" // ✅ NEW
+import { JoinRoomModal } from "@/components/join-room-modal"
 import { useUser } from "@/hooks/use-user"
 import { usePresence } from "@/hooks/use-presence"
 import { getActiveRooms, joinRoom as joinRoomAPI } from "@/lib/api/rooms"

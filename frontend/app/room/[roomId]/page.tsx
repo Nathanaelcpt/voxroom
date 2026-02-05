@@ -27,6 +27,7 @@ import {
   endRoom,
   inviteSpeaker,
   getParticipantsWithProfiles,
+  makeSpeaker,
 } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
@@ -43,6 +44,7 @@ interface ChatMessage {
   avatar_url?: string
   role?: "host" | "speaker" | "listener"
   event_type?: "join" | "leave" | "speaker_invited" | "mic_on" | "mic_off"
+  user_id?: string
 }
 
 export default function RoomPage() {
@@ -222,6 +224,7 @@ export default function RoomPage() {
               timestamp: new Date(payload.timestamp || Date.now()),
               avatar_url: payload.avatar_url,
               role: payload.role as Role,
+              user_id: payload.user_id,
             }
             setChatMessages((prev) => [...prev, chatMsg])
           }
@@ -362,6 +365,22 @@ export default function RoomPage() {
       throw err
     }
   }
+
+  async function handleMakeSpeaker(userId: string) {
+  if (!isHost || !roomId) return
+
+  try {
+    await makeSpeaker(roomId, userId)
+    console.log("✅ User promoted to speaker:", userId)
+    
+    // Refresh participants to show updated role
+    const profilesData = await getParticipantsWithProfiles(roomId)
+    setParticipants(profilesData.participants)
+  } catch (err) {
+    console.error("Failed to promote user:", err)
+    alert(err instanceof Error ? err.message : "Gagal promosi speaker")
+  }
+}
 
   // Leave/End room
   async function handleLeaveRoom() {
@@ -526,7 +545,8 @@ export default function RoomPage() {
               onSendMessage={handleSendMessage}
               messages={chatMessages}
               participantCount={participantCount}
-              canSpeak={canSpeak}
+              isHost={isHost}
+              onMakeSpeaker={handleMakeSpeaker}
             />
           </Card>
         </div>
