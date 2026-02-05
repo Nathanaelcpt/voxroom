@@ -70,7 +70,7 @@ func main() {
 	// WebSocket (NO AUTH MIDDLEWARE - handled inside ServeWS)
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws.ServeWS(hub, w, r)
-	}) // ✅ FIXED: Added closing brace here
+	})
 
 	// ======================
 	// SOCIAL FEATURES ROUTES
@@ -79,11 +79,10 @@ func main() {
 	// Following system
 	mux.HandleFunc("POST /social/follow", withAuth(social.FollowUser))
 	mux.HandleFunc("POST /social/unfollow", withAuth(social.UnfollowUser))
-	mux.HandleFunc("/social/", handleSocialRoutes) // Handles /social/{id}/followers and /social/{id}/following
+	mux.HandleFunc("/social/", handleSocialRoutes)
 	
 	// Online friends
 	mux.HandleFunc("GET /social/online-friends", withAuth(social.GetOnlineFriends))
-	// In SOCIAL FEATURES ROUTES section
 	mux.HandleFunc("GET /users/search", withAuth(social.SearchUsers))
 	mux.HandleFunc("POST /presence/online", withAuth(social.SetPresenceOnline))
 	mux.HandleFunc("POST /presence/offline", withAuth(social.SetPresenceOffline))
@@ -119,6 +118,7 @@ func main() {
 	log.Println("   GET  /users/search")
 	log.Println("   POST /presence/online")
 	log.Println("   POST /presence/offline")
+	log.Println("   GET  /social/is-friend/{id}")
 
 	log.Fatal(http.ListenAndServe(":"+port, handler))
 }
@@ -180,7 +180,6 @@ func handleRoomRoutes(w http.ResponseWriter, r *http.Request) {
 		action = parts[1]
 	}
 
-	// ✅ Add logging to use roomID variable
 	log.Printf("🔀 Room route: %s /rooms/%s/%s", r.Method, roomID, action)
 
 	// Route based on method and action
@@ -206,14 +205,8 @@ func handleRoomRoutes(w http.ResponseWriter, r *http.Request) {
 		auth.AuthMiddleware(http.HandlerFunc(room.RemoveSpeaker)).ServeHTTP(w, r)
 
 	case r.Method == "GET" && action == "participants-with-profiles":
+		// GET /rooms/{id}/participants-with-profiles - Get participants with profiles
 		room.GetParticipantsWithProfilesHandler(w, r)
-		
-	case r.Method == "POST" && action == "join":
-    // Use new handler that accepts role preference
-    auth.AuthMiddleware(http.HandlerFunc(room.JoinRoomWithRole)).ServeHTTP(w, r)
-    
-    // OR if keeping old handler:
-    auth.AuthMiddleware(http.HandlerFunc(room.JoinRoom)).ServeHTTP(w, r)
 
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
