@@ -20,7 +20,6 @@ import {
   UserPlus,
   Settings,
 } from "lucide-react"
-
 import { useUser } from "@/hooks/use-user"
 import {
   getRoomDetails,
@@ -30,16 +29,12 @@ import {
 } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
-import { usePresence } from "@/hooks/use-presence"
-
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 import type { ChatMessage } from "@/app/types/chat"
-
-/* ===================================================== */
+import { usePresence } from "@/hooks/use-presence"
 
 export default function RoomPage() {
-  /* ================= BASIC ================= */
   const params = useParams()
   const router = useRouter()
   const { user } = useUser()
@@ -47,13 +42,22 @@ export default function RoomPage() {
   const roomId = params?.roomId as string | undefined
   usePresence({ roomId })
 
-  /* ================= STATE ================= */
+  if (!roomId || !user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
+  }
+
+  const safeRoomId = roomId
+  const safeUser = user
+
   const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [participantCount, setParticipantCount] = useState(0)
   const [myRole, setMyRole] = useState<Role>("listener")
   const [isMuted, setIsMuted] = useState(true)
-  const [loading, setLoading] = useState(true)
   const [roomLoaded, setRoomLoaded] = useState(false)
 
   const [showSettings, setShowSettings] = useState(false)
@@ -68,127 +72,68 @@ export default function RoomPage() {
     ((userId: string, audioData: ArrayBuffer) => void) | null
   >(null)
 
-  /* ================= HELPERS ================= */
-
-  const resolveRole = useCallback(
-    (userId?: string): Role => {
-      if (!userId) return "listener"
-      return (
-        participants.find((p) => p.user_id === userId)?.role ??
-        "listener"
-      )
-    },
-    [participants]
-  )
-
-  /* ================= LOAD ROOM ================= */
-
+  /* LOAD ROOM */
   useEffect(() => {
-    if (!roomId || !user) {
-      setLoading(false)
-      return
-    }
-
-    const safeRoomId = roomId
-    const safeUser = user
-
     async function loadRoom() {
-      try {
-        const data = await getRoomDetails(safeRoomId)
-        setRoom(data)
+      const data = await getRoomDetails(safeRoomId)
+      setRoom(data)
 
-        const profiles = await getParticipantsWithProfiles(safeRoomId)
-        setParticipants(profiles.participants)
-        setParticipantCount(profiles.participants.length)
+      const profiles = await getParticipantsWithProfiles(safeRoomId)
+      setParticipants(profiles.participants)
+      setParticipantCount(profiles.participants.length)
 
-        const me = data.participants.find(
-          (p) => p.user_id === safeUser.id
-        )
-        if (me) setMyRole(me.role)
+      const me = data.participants.find(
+        (p) => p.user_id === safeUser.id
+      )
+      if (me) setMyRole(me.role)
 
-        setRoomLoaded(true)
-      } catch (err) {
-        console.error("Failed to load room:", err)
-        router.push("/")
-      } finally {
-        setLoading(false)
-      }
+      setRoomLoaded(true)
     }
 
-    loadRoom()
-  }, [roomId, user, router])
+    loadRoom().catch(() => router.push("/"))
+  }, [safeRoomId, safeUser.id, router])
 
-  /* ================= WEBSOCKET ================= */
-
+  /* WEBSOCKET */
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       const payload = message.payload
       if (!payload) return
 
       switch (message.type) {
-        case "role_updated": {
-          if (!payload.user_id || !payload.role) return
-          const role = payload.role as Role
-
-          setParticipants((prev) =>
-            prev.map((p) =>
-              p.user_id === payload.user_id ? { ...p, role } : p
-            )
-          )
-
-          if (payload.user_id === user?.id) {
-            setMyRole(role)
-          }
-          break
-        }
-
-        case "user_joined":
-          setParticipantCount((p) => p + 1)
-          break
-
-        case "user_left":
-          setParticipantCount((p) => Math.max(0, p - 1))
-          break
-
         case "chat": {
-          if (!payload.content) return
+        if (payload.user_id === safeUser.id) return
 
-          const msg: ChatMessage = {
-            id: payload.message_id || crypto.randomUUID(),
-            type: "chat",
-            username: payload.username || "User",
-            content: payload.content,
-            timestamp: new Date(payload.timestamp || Date.now()),
-            avatar_url: payload.avatar_url,
-            role: resolveRole(payload.user_id),
-            user_id: payload.user_id,
-          }
+        const content =
+          typeof payload.content === "string"
+            ? payload.content
+            : ""
 
-          setChatMessages((prev) => [...prev, msg])
-          break
+        if (!content) return
+
+        const chat: ChatMessage = {
+          id: payload.message_id ?? crypto.randomUUID(),
+          type: "chat",
+          username: payload.username ?? "User",
+          content, // ✅ SEKARANG STRING PASTI
+          timestamp: new Date(payload.timestamp ?? Date.now()),
+          avatar_url: payload.avatar_url,
+          role: (payload.role as Role) ?? "listener",
+          user_id: payload.user_id ?? "unknown",
         }
 
-        case "audio":
-          if (message.from && payload.chunk && playAudioChunkRef.current) {
-            const binary = atob(payload.chunk)
-            const bytes = new Uint8Array(binary.length)
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i)
-            }
-            playAudioChunkRef.current(message.from, bytes.buffer)
-          }
-          break
+        setChatMessages((prev) => [...prev, chat])
+        break
+      }
+
       }
     },
-    [user, resolveRole]
+    [safeUser.id]
   )
 
   const { isConnected, send, sendAudioChunk } = useWebSocket({
-    roomId: roomLoaded && roomId ? roomId : "",
+    roomId: roomLoaded ? safeRoomId : "",
     onMessage: handleWSMessage,
   })
-
-  /* ================= AUDIO ================= */
 
   const {
     isCapturing,
@@ -208,8 +153,6 @@ export default function RoomPage() {
     playAudioChunkRef.current = playAudioChunk
   }, [playAudioChunk])
 
-  /* ================= ACTIONS ================= */
-
   function handleToggleMic() {
     if (!canSpeak) return
     const next = !isMuted
@@ -218,28 +161,18 @@ export default function RoomPage() {
   }
 
   async function handleMakeSpeaker(userId: string) {
-    if (!isHost || !roomId) return
-    await makeSpeaker(roomId, userId)
+    if (!isHost) return
+    await makeSpeaker(safeRoomId, userId)
   }
 
   async function handleEndRoom() {
-    if (!isHost || !roomId) return
+    if (!isHost) return
     if (!confirm("Yakin ingin mengakhiri room?")) return
-    await endRoom(roomId)
+    await endRoom(safeRoomId)
     router.push("/")
   }
 
-  /* ================= RENDER GUARD ================= */
-
-  if (!room || !roomId || !user || loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    )
-  }
-
-  /* ================= UI ================= */
+  if (!room) return null
 
   return (
     <div className="min-h-screen p-6">
@@ -318,20 +251,18 @@ export default function RoomPage() {
         )}
 
         <div className="grid md:grid-cols-3 gap-6">
-          {/* LIVE STAGE */}
-          <Card className="md:col-span-2 min-h-105">
+          {/* STAGE */}
+          <Card className="md:col-span-2">
             <CardHeader>
               <CardTitle>Live Stage</CardTitle>
             </CardHeader>
-
-            <CardContent className="flex flex-col items-center justify-center gap-6 h-full">
-              <UserAvatar user={user} size="lg" />
-              <Badge className="capitalize">{myRole}</Badge>
+            <CardContent className="space-y-6 text-center">
+              <UserAvatar user={safeUser} size="lg" />
+              <Badge>{myRole}</Badge>
 
               {canSpeak && (
                 <Button
                   size="lg"
-                  className="rounded-full h-16 w-16"
                   variant={isMuted ? "destructive" : "default"}
                   onClick={handleToggleMic}
                 >
@@ -341,25 +272,45 @@ export default function RoomPage() {
             </CardContent>
           </Card>
 
-          {/* LIVE CHAT */}
+          {/* CHAT */}
           <LiveChat
-            roomId={roomId}
-            currentUserId={user.id}
+            roomId={safeRoomId}
+            currentUserId={safeUser.id}
             messages={chatMessages}
             participantCount={participantCount}
             isHost={isHost}
-            onSendMessage={(content) =>
+            onMakeSpeaker={handleMakeSpeaker}
+            onSendMessage={(content) => {
+              const text = content.trim()
+              if (!text) return
+
+              setChatMessages((prev) => [
+                ...prev,
+                {
+                  id: crypto.randomUUID(),
+                  type: "chat",
+                  username:
+                    safeUser.user_metadata?.full_name ||
+                    safeUser.email?.split("@")[0] ||
+                    "User",
+                  content: text,
+                  timestamp: new Date(),
+                  avatar_url: safeUser.user_metadata?.avatar_url,
+                  role: myRole,
+                  user_id: safeUser.id,
+                },
+              ])
+
               send("chat", {
-                content,
+                content: text,
                 username:
-                  user.user_metadata?.full_name ||
-                  user.email?.split("@")[0] ||
+                  safeUser.user_metadata?.full_name ||
+                  safeUser.email?.split("@")[0] ||
                   "User",
-                avatar_url: user.user_metadata?.avatar_url,
+                avatar_url: safeUser.user_metadata?.avatar_url,
                 role: myRole,
               })
-            }
-            onMakeSpeaker={handleMakeSpeaker}
+            }}
           />
         </div>
       </div>
@@ -368,7 +319,7 @@ export default function RoomPage() {
         <InviteFriendsModal
           open={showInviteModal}
           onClose={() => setShowInviteModal(false)}
-          roomId={roomId}
+          roomId={safeRoomId}
           roomTitle={room.title}
           onInvite={async () => {}}
         />

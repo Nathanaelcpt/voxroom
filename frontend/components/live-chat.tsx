@@ -47,10 +47,7 @@ function formatTime(date: Date) {
   const diff = Date.now() - date.getTime()
   if (diff < 60_000) return "just now"
   if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
 export function LiveChat({
@@ -68,14 +65,15 @@ export function LiveChat({
     endRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  function handleSend() {
-    if (!message.trim()) return
-    onSendMessage(message.trim())
+  const handleSend = () => {
+    const text = message.trim()
+    if (!text) return
+    onSendMessage(text)
     setMessage("")
   }
 
   return (
-    <Card className="flex flex-col h-full min-h-105">
+    <Card className="flex flex-col h-full">
       <CardHeader className="border-b py-3">
         <CardTitle className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-2">
@@ -90,7 +88,8 @@ export function LiveChat({
       </CardHeader>
 
       <CardContent className="flex-1 flex flex-col p-0">
-        <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-3 space-y-2">
           {messages.map((msg) => {
             if (msg.type !== "chat") {
               return (
@@ -103,15 +102,16 @@ export function LiveChat({
               )
             }
 
-            const isOwn = msg.user_id === currentUserId
-            const isListener =
-              msg.role !== "host" && msg.role !== "speaker"
+            const role = msg.role ?? "listener"
+            const userId = msg.user_id ?? ""
+            const isOwn = userId === currentUserId
+            const isListener = role === "listener"
 
             return (
               <div key={msg.id} className="flex items-start gap-2 group">
                 <UserAvatar
                   user={{
-                    id: msg.user_id || msg.id,
+                    id: userId || msg.id,
                     email: "",
                     user_metadata: {
                       avatar_url: msg.avatar_url,
@@ -126,58 +126,50 @@ export function LiveChat({
                     <span
                       className={cn(
                         "font-semibold truncate",
-                        msg.role && roleColor[msg.role]
+                        roleColor[role]
                       )}
                     >
                       {msg.username}
                     </span>
-                    {msg.role && (
-                      <span className="opacity-70">
-                        {roleIcon[msg.role]}
-                      </span>
-                    )}
-                    <span className="ml-1 text-[10px] text-muted-foreground">
+                    <span className="opacity-60">{roleIcon[role]}</span>
+                    <span className="ml-1 text-muted-foreground">
                       {formatTime(msg.timestamp)}
                     </span>
                   </div>
 
-                  <div className="text-sm wrap-break-word">
-                    {msg.content}
-                  </div>
+                  <div className="text-sm wrap-break-word">{msg.content}</div>
                 </div>
 
-                {isHost &&
-                  !isOwn &&
-                  isListener &&
-                  onMakeSpeaker &&
-                  msg.user_id && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100"
-                        >
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => onMakeSpeaker(msg.user_id!)}
-                          className="gap-2 text-xs"
-                        >
-                          <Mic className="h-3 w-3" />
-                          Jadikan Speaker
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
+                {/* Host menu */}
+                {isHost && !isOwn && isListener && onMakeSpeaker && userId && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100"
+                      >
+                        <MoreVertical className="h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => onMakeSpeaker(userId)}
+                        className="gap-2 text-xs"
+                      >
+                        <Mic className="h-3 w-3" />
+                        Jadikan Speaker
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
               </div>
             )
           })}
           <div ref={endRef} />
         </div>
 
+        {/* Input */}
         <div className="border-t p-3">
           <div className="flex gap-2">
             <Input
