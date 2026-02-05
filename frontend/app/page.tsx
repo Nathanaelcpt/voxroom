@@ -1,121 +1,95 @@
-// app/page.tsx - UPDATED with Join Room Modal
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useRouter } from "next/navigation"
+import { Radio, Users, AlertCircle } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Radio, Users, AlertCircle } from "lucide-react"
 import { AuthDialog } from "@/components/auth-dialog"
 import { OnlineFriendsSidebar } from "@/components/online-friends-sidebar"
 import { JoinRoomModal } from "@/components/join-room-modal"
+
 import { useUser } from "@/hooks/use-user"
 import { usePresence } from "@/hooks/use-presence"
 import { getActiveRooms, joinRoom as joinRoomAPI } from "@/lib/api/rooms"
 import type { Room } from "@/app/types/room"
 
+/* ======================================================= */
+
 export default function HomePage() {
+  const router = useRouter()
   const { user, loading: userLoading } = useUser()
-  const [authDialogOpen, setAuthDialogOpen] = useState(false)
+
+  /* ================= STATE ================= */
   const [rooms, setRooms] = useState<Room[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const router = useRouter()
 
-  // ✅ NEW: Join Modal State
+  const [authDialogOpen, setAuthDialogOpen] = useState(false)
+
+  // Join modal
   const [joinModalOpen, setJoinModalOpen] = useState(false)
   const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
   const [isFriendHost, setIsFriendHost] = useState(false)
 
   usePresence()
 
-  // Load rooms
-  useEffect(() => {
-    async function loadRooms() {
-      try {
-        const data = await getActiveRooms()
-        setRooms(data)
-        setError(null)
-      } catch (err) {
-        console.error("Failed to load rooms:", err)
-        if (rooms.length === 0) {
-          setError("Koneksi ke database lambat, mencoba lagi...")
-        }
-      } finally {
-        setLoading(false)
+  /* ================= LOAD ROOMS ================= */
+  const loadRooms = useCallback(async () => {
+    try {
+      const data = await getActiveRooms()
+      setRooms(data)
+      setError(null)
+    } catch (err) {
+      console.error("Failed to load rooms:", err)
+      if (rooms.length === 0) {
+        setError("Koneksi ke database lambat, mencoba lagi...")
       }
+    } finally {
+      setLoading(false)
     }
+  }, [rooms.length])
 
+  useEffect(() => {
     loadRooms()
     const interval = setInterval(loadRooms, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [loadRooms])
 
-  // ✅ NEW: Check if room host is user's friend
-  async function checkIfFriendHost(roomHostId: string): Promise<boolean> {
-    if (!user) return false
+  /* ================= HELPERS ================= */
+  async function getAccessToken(): Promise<string> {
+    const { getSupabase } = await import("@/lib/supabase")
+    const supabase = getSupabase()
+    const { data } = await supabase.auth.getSession()
+    return data.session?.access_token ?? ""
+  }
+
+  async function checkIfFriendHost(hostId?: string): Promise<boolean> {
+    if (!user || !hostId) return false
 
     try {
-      // Call backend to check if roomHostId is in user's following list
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/social/is-friend/${roomHostId}`,
+      const token = await getAccessToken()
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/social/is-friend/${hostId}`,
         {
           headers: {
-            Authorization: `Bearer ${await getAccessToken()}`,
+            Authorization: `Bearer ${token}`,
           },
         }
       )
 
-      if (!response.ok) return false
-
-      const data = await response.json()
-      return data.is_friend || false
-    } catch (error) {
-      console.error("Failed to check friend status:", error)
+      if (!res.ok) return false
+      const data = await res.json()
+      return Boolean(data?.is_friend)
+    } catch (err) {
+      console.error("checkIfFriendHost error:", err)
       return false
     }
   }
 
-  // ✅ NEW: Handle Join Room Click
-  async function handleJoinRoomClick(room: Room) {
-    if (!user) {
-      setAuthDialogOpen(true)
-      return
-    }
-
-    // Check if room host is friend
-    const isFriend = room.host_id ? await checkIfFriendHost(room.host_id) : false
-
-    setSelectedRoom(room)
-    setIsFriendHost(isFriend)
-    setJoinModalOpen(true)
-  }
-
-  // ✅ NEW: Handle Join with Role
-  async function handleJoinWithRole(roomId: string, asSpeaker: boolean) {
-    try {
-      // Call backend join endpoint with role preference
-      await joinRoomAPI(roomId, asSpeaker ? "speaker" : "listener")
-      
-      // Navigate to room
-      router.push(`/room/${roomId}`)
-    } catch (err) {
-      console.error("Failed to join room:", err)
-      throw err // Re-throw to be handled by modal
-    }
-  }
-
-  // Helper to get access token
-  async function getAccessToken() {
-    const { getSupabase } = await import("@/lib/supabase")
-    const supabase = getSupabase()
-    const {
-      data: { session },
-    } = await supabase.auth.getSession()
-    return session?.access_token || ""
-  }
-
+  /* ================= ACTIONS ================= */
   function handleStartStreaming() {
     if (!user) {
       setAuthDialogOpen(true)
@@ -124,6 +98,29 @@ export default function HomePage() {
     router.push("/go-live/setup")
   }
 
+  async function handleJoinRoomClick(room: Room) {
+    if (!user) {
+      setAuthDialogOpen(true)
+      return
+    }
+
+    const isFriend = await checkIfFriendHost(room.host_id)
+    setSelectedRoom(room)
+    setIsFriendHost(isFriend)
+    setJoinModalOpen(true)
+  }
+
+  async function handleJoinWithRole(roomId: string, asSpeaker: boolean) {
+    try {
+      await joinRoomAPI(roomId, asSpeaker ? "speaker" : "listener")
+      router.push(`/room/${roomId}`)
+    } catch (err) {
+      console.error("Failed to join room:", err)
+      throw err
+    }
+  }
+
+  /* ================= LOADING ================= */
   if (userLoading || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -135,13 +132,14 @@ export default function HomePage() {
     )
   }
 
+  /* ================= UI ================= */
   return (
     <>
       <section className="container mx-auto p-6">
         <div className="grid lg:grid-cols-4 gap-6">
-          {/* Main Content */}
+          {/* MAIN */}
           <div className="lg:col-span-3 space-y-6">
-            {/* Header */}
+            {/* HEADER */}
             <div className="flex items-center justify-between">
               <div>
                 <h1 className="text-3xl font-bold tracking-tight">Live Rooms</h1>
@@ -156,7 +154,7 @@ export default function HomePage() {
               </Button>
             </div>
 
-            {/* Error */}
+            {/* ERROR */}
             {error && (
               <Card className="border-destructive">
                 <CardContent className="flex items-center gap-2 pt-6 text-destructive">
@@ -166,25 +164,32 @@ export default function HomePage() {
               </Card>
             )}
 
-            {/* Empty State */}
+            {/* EMPTY */}
             {rooms.length === 0 && !error && (
               <Card>
                 <CardContent className="flex flex-col items-center justify-center py-16">
                   <Radio className="h-16 w-16 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">Belum ada room live</h3>
+                  <h3 className="text-lg font-semibold mb-2">
+                    Belum ada room live
+                  </h3>
                   <p className="text-sm text-muted-foreground mb-4">
                     Jadilah yang pertama mulai streaming!
                   </p>
-                  <Button onClick={handleStartStreaming}>Mulai Streaming</Button>
+                  <Button onClick={handleStartStreaming}>
+                    Mulai Streaming
+                  </Button>
                 </CardContent>
               </Card>
             )}
 
-            {/* Rooms Grid */}
+            {/* ROOMS */}
             {rooms.length > 0 && (
               <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                 {rooms.map((room) => (
-                  <Card key={room.id} className="hover:shadow-lg transition-shadow">
+                  <Card
+                    key={room.id}
+                    className="hover:shadow-lg transition-shadow"
+                  >
                     <CardContent className="p-6 space-y-4">
                       <div className="flex items-start justify-between">
                         <div className="flex-1 min-w-0">
@@ -200,6 +205,7 @@ export default function HomePage() {
                             <span>Audio only</span>
                           </div>
                         </div>
+
                         {room.is_live && (
                           <div className="flex items-center gap-1 text-xs font-medium text-green-600">
                             <div className="h-2 w-2 rounded-full bg-green-600 animate-pulse" />
@@ -208,7 +214,6 @@ export default function HomePage() {
                         )}
                       </div>
 
-                      {/* ✅ UPDATED: Use handleJoinRoomClick instead of direct navigation */}
                       <Button
                         className="w-full"
                         onClick={() => handleJoinRoomClick(room)}
@@ -222,7 +227,7 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Sidebar */}
+          {/* SIDEBAR */}
           {user && (
             <div className="lg:col-span-1">
               <OnlineFriendsSidebar />
@@ -233,7 +238,6 @@ export default function HomePage() {
 
       <AuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
 
-      {/* ✅ NEW: Join Room Modal */}
       {selectedRoom && (
         <JoinRoomModal
           open={joinModalOpen}
