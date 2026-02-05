@@ -1,14 +1,13 @@
-// hooks/use-audio-stream.ts
-
+// hooks/use-audio-stream.ts - FIXED AudioContext Management
 import { useEffect, useRef, useState, useCallback } from "react"
 
-interface UseAudioStreamOptions {
+interface UseAudioStreamProps {
   isHost: boolean
   canSpeak: boolean
   isMuted: boolean
   isConnected: boolean
   sendAudioChunk: (chunk: ArrayBuffer) => void
-  playbackVolume?: number // 0 to 2 (1 = normal, 2 = 200%)
+  playbackVolume: number
 }
 
 export function useAudioStream({
@@ -17,192 +16,231 @@ export function useAudioStream({
   isMuted,
   isConnected,
   sendAudioChunk,
-  playbackVolume = 1.5, // ✅ Default 150% volume boost
-}: UseAudioStreamOptions) {
-  const [micPermission, setMicPermission] = useState<"granted" | "denied" | "prompt">("prompt")
+  playbackVolume,
+}: UseAudioStreamProps) {
+  const [micPermission, setMicPermission] = useState<PermissionState | null>(null)
   const [isCapturing, setIsCapturing] = useState(false)
+  const [mediaStream, setMediaStream] = useState<MediaStream | null>(null)
 
-  // Refs for audio processing
-  const mediaStreamRef = useRef<MediaStream | null>(null)
+  // Audio refs
   const audioContextRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const mediaStreamSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const processorRef = useRef<ScriptProcessorNode | null>(null)
-  const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const playbackAudioContextsRef = useRef<Map<string, AudioContext>>(new Map())
+  const playbackGainNodesRef = useRef<Map<string, GainNode>>(new Map())
 
-  // ✅ Track mute state in ref to avoid closure issues
-  const isMutedRef = useRef(isMuted)
+  // ✅ FIXED: Track if AudioContext is active
+  const isAudioContextActiveRef = useRef(false)
+
+  // Request microphone permission and start capturing
   useEffect(() => {
-    isMutedRef.current = isMuted
-  }, [isMuted])
-
-  // Audio playback refs (for listeners)
-  const playbackContextRef = useRef<AudioContext | null>(null)
-  const gainNodeRef = useRef<GainNode | null>(null)
-
-  // Start capturing audio (for host/speaker)
-  const startCapture = useCallback(async () => {
-    if (!canSpeak || isCapturing) return
-
-    try {
-      console.log("🎤 Requesting microphone access...")
-      
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          sampleRate: 48000,
-        },
-      })
-
-      mediaStreamRef.current = stream
-      setMicPermission("granted")
-      setIsCapturing(true)
-
-      // Create audio context for processing
-      const audioContext = new AudioContext({ sampleRate: 48000 })
-      audioContextRef.current = audioContext
-
-      const source = audioContext.createMediaStreamSource(stream)
-      sourceRef.current = source
-
-      // Use ScriptProcessorNode for audio capture
-      const processor = audioContext.createScriptProcessor(4096, 1, 1)
-      processorRef.current = processor
-
-      processor.onaudioprocess = (e) => {
-        // ✅ Only check connection, not mute state
-        if (!isConnected) return
-
-        // ✅ Check mute via ref to get current value
-        if (isMutedRef.current) return
-
-        const inputData = e.inputBuffer.getChannelData(0)
-        
-        // Convert Float32Array to Int16Array (PCM)
-        const pcmData = new Int16Array(inputData.length)
-        for (let i = 0; i < inputData.length; i++) {
-          const s = Math.max(-1, Math.min(1, inputData[i]))
-          pcmData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF
-        }
-
-        // Send PCM audio chunk via WebSocket
-        sendAudioChunk(pcmData.buffer)
-      }
-
-      source.connect(processor)
-      processor.connect(audioContext.destination)
-
-      console.log("✅ Audio capture started")
-    } catch (err) {
-      console.error("❌ Failed to start audio capture:", err)
-      setMicPermission("denied")
-      alert("Microphone access denied. Please allow microphone access in your browser settings.")
-    }
-  }, [canSpeak, isCapturing, isConnected, sendAudioChunk])
-
-  // Stop capturing audio
-  const stopCapture = useCallback(() => {
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach(track => track.stop())
-      mediaStreamRef.current = null
-    }
-
-    if (processorRef.current) {
-      processorRef.current.disconnect()
-      processorRef.current = null
-    }
-
-    if (sourceRef.current) {
-      sourceRef.current.disconnect()
-      sourceRef.current = null
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-
-    setIsCapturing(false)
-    console.log("🔇 Audio capture stopped")
-  }, [])
-
-  // ✅ Play received audio with volume boost (for listeners)
-  const playAudioChunk = useCallback(async (userId: string, audioData: ArrayBuffer) => {
-    if (!playbackContextRef.current) {
-      playbackContextRef.current = new AudioContext({ sampleRate: 48000 })
-      
-      // ✅ Create gain node for volume control
-      gainNodeRef.current = playbackContextRef.current.createGain()
-      gainNodeRef.current.gain.value = playbackVolume
-      gainNodeRef.current.connect(playbackContextRef.current.destination)
-    }
-
-    const context = playbackContextRef.current
-    const gainNode = gainNodeRef.current!
-
-    try {
-      // Convert Int16Array back to Float32Array
-      const pcmData = new Int16Array(audioData)
-      const floatData = new Float32Array(pcmData.length)
-      
-      for (let i = 0; i < pcmData.length; i++) {
-        floatData[i] = pcmData[i] / (pcmData[i] < 0 ? 0x8000 : 0x7FFF)
-      }
-
-      // Create audio buffer
-      const audioBuffer = context.createBuffer(1, floatData.length, 48000)
-      audioBuffer.getChannelData(0).set(floatData)
-
-      // Create buffer source and play through gain node
-      const source = context.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(gainNode) // ✅ Connect to gain node instead of destination
-      source.start()
-
-      // Auto-cleanup after playback
-      source.onended = () => {
-        source.disconnect()
-      }
-    } catch (err) {
-      console.error("❌ Failed to play audio chunk:", err)
-    }
-  }, [playbackVolume])
-
-  // ✅ Update playback volume dynamically
-  const setPlaybackVolume = useCallback((volume: number) => {
-    if (gainNodeRef.current) {
-      gainNodeRef.current.gain.value = volume
-      console.log(`🔊 Playback volume: ${Math.round(volume * 100)}%`)
-    }
-  }, [])
-
-  // ✅ Always keep mic active if canSpeak (for audio meter to work)
-  useEffect(() => {
-    if (!canSpeak) {
-      stopCapture()
+    if (!canSpeak || !isConnected) {
       return
     }
 
-    if (isConnected && !isCapturing) {
-      startCapture()
-    }
-  }, [canSpeak, isConnected, isCapturing, startCapture, stopCapture])
+    let stream: MediaStream | null = null
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopCapture()
-      if (playbackContextRef.current) {
-        playbackContextRef.current.close()
+    async function startCapture() {
+      try {
+        console.log("🎤 Requesting microphone access...")
+        
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+            sampleRate: 48000,
+          },
+        })
+
+        console.log("✅ Microphone access granted")
+        setMicPermission("granted")
+        setMediaStream(stream)
+        setIsCapturing(true)
+
+        // ✅ FIXED: Create AudioContext only if not already active
+        if (!isAudioContextActiveRef.current) {
+          // Create AudioContext
+          const audioContext = new AudioContext({ sampleRate: 48000 })
+          audioContextRef.current = audioContext
+          isAudioContextActiveRef.current = true
+
+          // Create analyser for visualization
+          const analyser = audioContext.createAnalyser()
+          analyser.fftSize = 2048
+          analyserRef.current = analyser
+
+          // Create media stream source
+          const source = audioContext.createMediaStreamSource(stream)
+          mediaStreamSourceRef.current = source
+
+          // Connect for visualization
+          source.connect(analyser)
+
+          // Create audio processor for sending chunks
+          const processor = audioContext.createScriptProcessor(4096, 1, 1)
+          processorRef.current = processor
+
+          processor.onaudioprocess = (e) => {
+            // Only send if not muted and connected
+            if (!isMuted && isConnected) {
+              const inputData = e.inputBuffer.getChannelData(0)
+              const outputData = new Float32Array(inputData.length)
+              outputData.set(inputData)
+
+              // Convert to ArrayBuffer and send
+              const buffer = outputData.buffer
+              sendAudioChunk(buffer)
+            }
+          }
+
+          // Connect processor
+          source.connect(processor)
+          processor.connect(audioContext.destination)
+
+          console.log("✅ Audio processing started")
+        }
+      } catch (err) {
+        console.error("❌ Microphone access denied:", err)
+        setMicPermission("denied")
+        setIsCapturing(false)
       }
     }
-  }, [stopCapture])
+
+    startCapture()
+
+    // Cleanup
+    return () => {
+      console.log("🧹 Cleaning up audio capture...")
+
+      // Stop media stream
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          track.stop()
+          console.log("🛑 Stopped track:", track.kind)
+        })
+      }
+
+      // Disconnect nodes
+      if (processorRef.current) {
+        processorRef.current.disconnect()
+        processorRef.current.onaudioprocess = null
+        processorRef.current = null
+      }
+
+      if (mediaStreamSourceRef.current) {
+        mediaStreamSourceRef.current.disconnect()
+        mediaStreamSourceRef.current = null
+      }
+
+      if (analyserRef.current) {
+        analyserRef.current.disconnect()
+        analyserRef.current = null
+      }
+
+      // ✅ FIXED: Close AudioContext safely
+      if (audioContextRef.current && isAudioContextActiveRef.current) {
+        const context = audioContextRef.current
+        
+        // Check if context is not already closed
+        if (context.state !== "closed") {
+          context.close().then(() => {
+            console.log("✅ AudioContext closed")
+            isAudioContextActiveRef.current = false
+          }).catch((err) => {
+            console.warn("⚠️ Error closing AudioContext:", err)
+            isAudioContextActiveRef.current = false
+          })
+        } else {
+          isAudioContextActiveRef.current = false
+        }
+        
+        audioContextRef.current = null
+      }
+
+      setIsCapturing(false)
+      setMediaStream(null)
+    }
+  }, [canSpeak, isConnected, isMuted, sendAudioChunk])
+
+  // Play audio chunk from other users
+  const playAudioChunk = useCallback(
+    (userId: string, audioData: ArrayBuffer) => {
+      try {
+        // Get or create AudioContext for this user
+        let context = playbackAudioContextsRef.current.get(userId)
+        let gainNode = playbackGainNodesRef.current.get(userId)
+
+        if (!context || context.state === "closed") {
+          context = new AudioContext({ sampleRate: 48000 })
+          playbackAudioContextsRef.current.set(userId, context)
+
+          // Create gain node for volume control
+          gainNode = context.createGain()
+          gainNode.gain.value = playbackVolume
+          gainNode.connect(context.destination)
+          playbackGainNodesRef.current.set(userId, gainNode)
+        }
+
+        // Update volume
+        if (gainNode) {
+          gainNode.gain.value = playbackVolume
+        }
+
+        // Convert ArrayBuffer to AudioBuffer
+        const float32Array = new Float32Array(audioData)
+        const audioBuffer = context.createBuffer(1, float32Array.length, 48000)
+        audioBuffer.copyToChannel(float32Array, 0)
+
+        // Create buffer source and play
+        const source = context.createBufferSource()
+        source.buffer = audioBuffer
+        
+        if (gainNode) {
+          source.connect(gainNode)
+        } else {
+          source.connect(context.destination)
+        }
+        
+        source.start()
+      } catch (err) {
+        console.error("❌ Error playing audio chunk:", err)
+      }
+    },
+    [playbackVolume]
+  )
+
+  // Update playback volume
+  const setPlaybackVolume = useCallback((volume: number) => {
+    playbackGainNodesRef.current.forEach((gainNode) => {
+      gainNode.gain.value = volume
+    })
+  }, [])
+
+  // Cleanup playback contexts on unmount
+  useEffect(() => {
+    return () => {
+      console.log("🧹 Cleaning up playback contexts...")
+      
+      playbackAudioContextsRef.current.forEach((context, userId) => {
+        if (context.state !== "closed") {
+          context.close().catch((err) => {
+            console.warn(`⚠️ Error closing playback context for ${userId}:`, err)
+          })
+        }
+      })
+      
+      playbackAudioContextsRef.current.clear()
+      playbackGainNodesRef.current.clear()
+    }
+  }, [])
 
   return {
     micPermission,
     isCapturing,
+    mediaStream,
     playAudioChunk,
     setPlaybackVolume,
-    mediaStream: mediaStreamRef.current,
   }
 }
