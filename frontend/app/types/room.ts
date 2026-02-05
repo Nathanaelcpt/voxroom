@@ -5,8 +5,11 @@ export type Role = "host" | "speaker" | "listener"
 export interface Room {
   id: string
   title: string
-  is_live: boolean
+  host_id?: string      // ✅ ADD if missing
+  host_name?: string    // ✅ ADD if missing
   listeners: number
+  is_live: boolean
+  created_at: string
 }
 
 export interface Participant {

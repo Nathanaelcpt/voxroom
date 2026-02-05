@@ -1,3 +1,4 @@
+// app/page.tsx - UPDATED with Join Room Modal
 "use client"
 
 import { useEffect, useState } from "react"
@@ -8,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Radio, Users, AlertCircle } from "lucide-react"
 import { AuthDialog } from "@/components/auth-dialog"
 import { OnlineFriendsSidebar } from "@/components/online-friends-sidebar"
+import { JoinRoomModal } from "@/components/join-room-modal" // ✅ NEW
 import { useUser } from "@/hooks/use-user"
 import { usePresence } from "@/hooks/use-presence"
 import { getActiveRooms, joinRoom as joinRoomAPI } from "@/lib/api/rooms"
@@ -21,48 +23,97 @@ export default function HomePage() {
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
-  // ✅ Track presence - updates user as "online" when on homepage
+  // ✅ NEW: Join Modal State
+  const [joinModalOpen, setJoinModalOpen] = useState(false)
+  const [selectedRoom, setSelectedRoom] = useState<Room | null>(null)
+  const [isFriendHost, setIsFriendHost] = useState(false)
+
   usePresence()
 
   // Load rooms
   useEffect(() => {
     async function loadRooms() {
-    try {
-      const data = await getActiveRooms()
-      setRooms(data)
-      setError(null)
-    } catch (err) {
-      console.error("Failed to load rooms:", err)
-      
-      // ✅ Don't show error if we already have rooms displayed
-      if (rooms.length === 0) {
-        setError("Koneksi ke database lambat, mencoba lagi...")
+      try {
+        const data = await getActiveRooms()
+        setRooms(data)
+        setError(null)
+      } catch (err) {
+        console.error("Failed to load rooms:", err)
+        if (rooms.length === 0) {
+          setError("Koneksi ke database lambat, mencoba lagi...")
+        }
+      } finally {
+        setLoading(false)
       }
-      // ✅ Otherwise silently retry in background
-    } finally {
-      setLoading(false)
     }
-  }
 
     loadRooms()
-
     const interval = setInterval(loadRooms, 5000)
     return () => clearInterval(interval)
   }, [])
 
-  async function handleJoinRoom(roomId: string) {
+  // ✅ NEW: Check if room host is user's friend
+  async function checkIfFriendHost(roomHostId: string): Promise<boolean> {
+    if (!user) return false
+
+    try {
+      // Call backend to check if roomHostId is in user's following list
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/social/is-friend/${roomHostId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${await getAccessToken()}`,
+          },
+        }
+      )
+
+      if (!response.ok) return false
+
+      const data = await response.json()
+      return data.is_friend || false
+    } catch (error) {
+      console.error("Failed to check friend status:", error)
+      return false
+    }
+  }
+
+  // ✅ NEW: Handle Join Room Click
+  async function handleJoinRoomClick(room: Room) {
     if (!user) {
       setAuthDialogOpen(true)
       return
     }
 
+    // Check if room host is friend
+    const isFriend = room.host_id ? await checkIfFriendHost(room.host_id) : false
+
+    setSelectedRoom(room)
+    setIsFriendHost(isFriend)
+    setJoinModalOpen(true)
+  }
+
+  // ✅ NEW: Handle Join with Role
+  async function handleJoinWithRole(roomId: string, asSpeaker: boolean) {
     try {
-      await joinRoomAPI(roomId)
+      // Call backend join endpoint with role preference
+      await joinRoomAPI(roomId, asSpeaker ? "speaker" : "listener")
+      
+      // Navigate to room
       router.push(`/room/${roomId}`)
     } catch (err) {
       console.error("Failed to join room:", err)
-      alert(err instanceof Error ? err.message : "Gagal join room")
+      throw err // Re-throw to be handled by modal
     }
+  }
+
+  // Helper to get access token
+  async function getAccessToken() {
+    const { getSupabase } = await import("@/lib/supabase")
+    const supabase = getSupabase()
+    const {
+      data: { session },
+    } = await supabase.auth.getSession()
+    return session?.access_token || ""
   }
 
   function handleStartStreaming() {
@@ -157,9 +208,10 @@ export default function HomePage() {
                         )}
                       </div>
 
+                      {/* ✅ UPDATED: Use handleJoinRoomClick instead of direct navigation */}
                       <Button
                         className="w-full"
-                        onClick={() => handleJoinRoom(room.id)}
+                        onClick={() => handleJoinRoomClick(room)}
                       >
                         Join Room
                       </Button>
@@ -170,7 +222,7 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* Sidebar - Only show when user is logged in */}
+          {/* Sidebar */}
           {user && (
             <div className="lg:col-span-1">
               <OnlineFriendsSidebar />
@@ -180,6 +232,26 @@ export default function HomePage() {
       </section>
 
       <AuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
+
+      {/* ✅ NEW: Join Room Modal */}
+      {selectedRoom && (
+        <JoinRoomModal
+          open={joinModalOpen}
+          onClose={() => {
+            setJoinModalOpen(false)
+            setSelectedRoom(null)
+            setIsFriendHost(false)
+          }}
+          room={{
+            id: selectedRoom.id,
+            title: selectedRoom.title,
+            hostName: selectedRoom.host_name,
+            listeners: selectedRoom.listeners,
+          }}
+          isFriendHost={isFriendHost}
+          onJoin={handleJoinWithRole}
+        />
+      )}
     </>
   )
 }

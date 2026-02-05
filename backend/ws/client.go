@@ -1,3 +1,4 @@
+// backend/ws/client.go - FIXED (Proper map initialization)
 package ws
 
 import (
@@ -11,9 +12,10 @@ type Client struct {
 	Conn     *websocket.Conn
 	Send     chan Message
 	UserID   string
+	Username string // Store username for chat
 	RoomID   string
 	Role     string // "host" | "speaker" | "listener"
-	CanSpeak bool   // Derived from Role (host/speaker = true, listener = false)
+	CanSpeak bool   // Derived from Role
 }
 
 // WritePump pumps messages from the hub to the websocket connection
@@ -52,9 +54,33 @@ func (c *Client) ReadPump(hub *Hub) {
 		msg.RoomID = c.RoomID
 		msg.From = c.UserID
 
+		// ✅ FIXED: Initialize Data map if nil, then add username
+		if msg.Type == "chat" {
+			// Initialize map if it's nil
+			if msg.Data == nil {
+				msg.Data = make(map[string]interface{})
+			}
+			// Now we can safely add to it
+			msg.Data["username"] = c.Username
+			msg.Data["user_id"] = c.UserID
+			msg.Data["role"] = c.Role
+		}
+
+		// ✅ FIXED: Same for speaking events
+		if msg.Type == "mic_on" || msg.Type == "mic_off" || msg.Type == "speaking" {
+			// Initialize map if it's nil
+			if msg.Data == nil {
+				msg.Data = make(map[string]interface{})
+			}
+			// Now we can safely add to it
+			msg.Data["username"] = c.Username
+			msg.Data["user_id"] = c.UserID
+			msg.Data["role"] = c.Role
+		}
+
 		// Validate permissions
 		if !c.validateMessagePermission(msg.Type) {
-			log.Printf("⛔ User %s (%s) tried to send unauthorized message type: %s", 
+			log.Printf("⛔ User %s (%s) tried to send unauthorized message type: %s",
 				c.UserID, c.Role, msg.Type)
 			continue
 		}
@@ -76,6 +102,11 @@ func (c *Client) validateMessagePermission(msgType string) bool {
 
 	if audioMessages[msgType] {
 		return c.CanSpeak
+	}
+
+	// Chat messages - everyone can send
+	if msgType == "chat" {
+		return true // Or restrict to canSpeak if you want only speakers to chat
 	}
 
 	// All other messages are allowed

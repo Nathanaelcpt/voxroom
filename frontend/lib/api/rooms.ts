@@ -69,7 +69,12 @@ export async function createRoom(
 /**
  * Join a room
  */
-export async function joinRoom(roomId: string): Promise<JoinRoomResponse> {
+// lib/api/rooms.ts - UPDATE joinRoom function
+
+export async function joinRoom(
+  roomId: string, 
+  preferredRole?: "speaker" | "listener"  // ✅ ADD THIS
+): Promise<JoinRoomResponse> {
   const token = await getAccessToken()
 
   if (!token) {
@@ -79,8 +84,12 @@ export async function joinRoom(roomId: string): Promise<JoinRoomResponse> {
   const res = await fetch(`${API_URL}/rooms/${roomId}/join`, {
     method: "POST",
     headers: {
+      "Content-Type": "application/json",  // ✅ ADD THIS
       Authorization: `Bearer ${token}`,
     },
+    body: JSON.stringify({  // ✅ ADD THIS
+      preferred_role: preferredRole || "listener"
+    }),
   })
 
   if (!res.ok) {

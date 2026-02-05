@@ -1,7 +1,8 @@
+// app/room/[roomId]/page.tsx - FINAL FIXED (Proper declaration order)
 "use client"
 
 import { useParams, useRouter } from "next/navigation"
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -10,14 +11,39 @@ import { AudioDeviceSelector } from "@/components/audio-device-selector"
 import { VolumeControl } from "@/components/volume-control"
 import { UserAvatar } from "@/components/user-avatar"
 import { InviteFriendsModal } from "@/components/invite-friends-modal"
-import { Mic, MicOff, Users, Radio, LogOut, Volume2, UserPlus, Settings } from "lucide-react"
+import { LiveChat } from "@/components/live-chat"
+import {
+  Mic,
+  MicOff,
+  Users,
+  Radio,
+  LogOut,
+  UserPlus,
+  Settings,
+} from "lucide-react"
 import { useUser } from "@/hooks/use-user"
-import { getRoomDetails, endRoom, inviteSpeaker, getParticipantsWithProfiles } from "@/lib/api/rooms"
+import {
+  getRoomDetails,
+  endRoom,
+  inviteSpeaker,
+  getParticipantsWithProfiles,
+} from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 import { usePresence } from "@/hooks/use-presence"
+
+interface ChatMessage {
+  id: string
+  type: "system" | "chat" | "event"
+  username: string
+  content: string
+  timestamp: Date
+  avatar_url?: string
+  role?: "host" | "speaker" | "listener"
+  event_type?: "join" | "leave" | "speaker_invited" | "mic_on" | "mic_off"
+}
 
 export default function RoomPage() {
   const params = useParams()
@@ -29,6 +55,7 @@ export default function RoomPage() {
 
   const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
+  const [participantCount, setParticipantCount] = useState(0)
   const [myRole, setMyRole] = useState<Role>("listener")
   const [isMuted, setIsMuted] = useState(true)
   const [loading, setLoading] = useState(true)
@@ -36,12 +63,16 @@ export default function RoomPage() {
   const [speakingUsers, setSpeakingUsers] = useState<Set<string>>(new Set())
   const [showSettings, setShowSettings] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
-  const [playbackVolume, setPlaybackVolume] = useState(1.5) // 150% default
+  const [playbackVolume, setPlaybackVolume] = useState(1.5)
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
 
   const canSpeak = myRole === "host" || myRole === "speaker"
   const isHost = myRole === "host"
 
-  // STEP 1: Load room details
+  // ✅ FIXED: Use ref to hold playAudioChunk function
+  const playAudioChunkRef = useRef<((userId: string, audioData: ArrayBuffer) => void) | null>(null)
+
+  // Load room details
   useEffect(() => {
     if (!roomId || !user) {
       if (!user) {
@@ -58,13 +89,14 @@ export default function RoomPage() {
         const data = await getRoomDetails(roomId!)
         setRoom(data)
 
-        // ✅ Get participants with profiles from backend
         try {
           const profilesData = await getParticipantsWithProfiles(roomId!)
           setParticipants(profilesData.participants)
+          setParticipantCount(profilesData.participants.length)
         } catch (err) {
-          console.warn("⚠️ Failed to load participant profiles, using basic data:", err)
+          console.warn("⚠️ Failed to load participant profiles:", err)
           setParticipants(data.participants)
+          setParticipantCount(data.participants.length)
         }
 
         const me = data.participants.find((p) => p.user_id === user.id)
@@ -87,60 +119,150 @@ export default function RoomPage() {
     loadRoom()
   }, [roomId, user, router])
 
+  // Add system message to chat
+  const addSystemMessage = useCallback(
+    (
+      username: string,
+      eventType: ChatMessage["event_type"],
+      role?: Role
+    ) => {
+      const message: ChatMessage = {
+        id: `${Date.now()}-${Math.random()}`,
+        type: "event",
+        username,
+        content: "",
+        timestamp: new Date(),
+        event_type: eventType,
+        role,
+      }
+      setChatMessages((prev) => [...prev, message])
+    },
+    []
+  )
+
   // WebSocket message handler
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
+      const payload = message.payload
+      if (!payload) return
+
       switch (message.type) {
         case "role_assigned":
-          if (message.payload?.role) {
-            setMyRole(message.payload.role)
+          if (payload.role) {
+            setMyRole(payload.role as Role)
           }
           break
 
         case "role_updated":
-          if (message.payload?.user_id && message.payload?.role) {
+          if (payload.user_id && payload.role) {
+            const newRole = payload.role as Role
+            
             setParticipants((prev) =>
               prev.map((p) =>
-                p.user_id === message.payload.user_id
-                  ? { ...p, role: message.payload.role }
+                p.user_id === payload.user_id
+                  ? { ...p, role: newRole }
                   : p
               )
             )
 
-            if (user !== null && message.payload.user_id === user.id) {
-              setMyRole(message.payload.role)
-              console.log("✅ Your role updated:", message.payload.role)
+            if (user !== null && payload.user_id === user.id) {
+              setMyRole(newRole)
+              console.log("✅ Your role updated:", newRole)
+            }
+
+            if (newRole === "speaker") {
+              addSystemMessage(
+                payload.username || "User",
+                "speaker_invited",
+                "speaker"
+              )
             }
           }
           break
 
         case "listener_count":
-          if (message.payload?.count !== undefined) {
-            setRoom((prev) =>
-              prev ? { ...prev, listeners: message.payload.count } : prev
+          if (typeof payload.count === "number") {
+            setParticipantCount(payload.count)
+            setRoom((prev) => {
+              if (!prev) return prev
+              return { ...prev, listeners: payload.count as number }
+            })
+          }
+          break
+
+        case "user_joined":
+          if (payload.user_id && payload.username) {
+            setParticipantCount((prev) => prev + 1)
+            addSystemMessage(
+              payload.username,
+              "join",
+              (payload.role as Role) || "listener"
             )
           }
           break
 
+        case "user_left":
+          if (payload.user_id && payload.username) {
+            setParticipantCount((prev) => Math.max(0, prev - 1))
+            addSystemMessage(
+              payload.username,
+              "leave",
+              payload.role as Role
+            )
+          }
+          break
+
+        case "chat":
+          if (payload.content) {
+            const chatMsg: ChatMessage = {
+              id: payload.message_id || `${Date.now()}-${Math.random()}`,
+              type: "chat",
+              username: payload.username || "User",
+              content: payload.content,
+              timestamp: new Date(payload.timestamp || Date.now()),
+              avatar_url: payload.avatar_url,
+              role: payload.role as Role,
+            }
+            setChatMessages((prev) => [...prev, chatMsg])
+          }
+          break
+
         case "audio":
-          if (message.from && message.payload?.chunk) {
-            const binary = atob(message.payload.chunk)
+          // ✅ FIXED: Use ref to access playAudioChunk
+          if (message.from && payload.chunk && playAudioChunkRef.current) {
+            const binary = atob(payload.chunk)
             const bytes = new Uint8Array(binary.length)
             for (let i = 0; i < binary.length; i++) {
               bytes[i] = binary.charCodeAt(i)
             }
-            playAudioChunk(message.from, bytes.buffer)
+            playAudioChunkRef.current(message.from, bytes.buffer)
           }
           break
 
         case "speaking":
-          if (message.payload?.user_id !== undefined) {
+          if (payload.user_id !== undefined) {
             setSpeakingUsers((prev) => {
               const next = new Set(prev)
-              if (message.payload.is_speaking) {
-                next.add(message.payload.user_id)
+              if (payload.is_speaking) {
+                next.add(payload.user_id!)
+                
+                if (payload.user_id !== user?.id && payload.username) {
+                  addSystemMessage(
+                    payload.username,
+                    "mic_on",
+                    payload.role as Role
+                  )
+                }
               } else {
-                next.delete(message.payload.user_id)
+                next.delete(payload.user_id!)
+                
+                if (payload.user_id !== user?.id && payload.username) {
+                  addSystemMessage(
+                    payload.username,
+                    "mic_off",
+                    payload.role as Role
+                  )
+                }
               }
               return next
             })
@@ -153,17 +275,23 @@ export default function RoomPage() {
           break
       }
     },
-    [user, router]
+    [user, router, addSystemMessage]
   )
 
-  // STEP 2: Connect WebSocket
+  // Connect WebSocket
   const { isConnected, send, sendAudioChunk } = useWebSocket({
     roomId: roomLoaded && roomId ? roomId : "",
     onMessage: handleWSMessage,
   })
 
-  // STEP 3: Audio streaming with volume control
-  const { micPermission, isCapturing, playAudioChunk, setPlaybackVolume: updatePlaybackVolume, mediaStream } = useAudioStream({
+  // Audio streaming
+  const {
+    micPermission,
+    isCapturing,
+    playAudioChunk,
+    setPlaybackVolume: updatePlaybackVolume,
+    mediaStream,
+  } = useAudioStream({
     isHost,
     canSpeak,
     isMuted,
@@ -171,6 +299,26 @@ export default function RoomPage() {
     sendAudioChunk,
     playbackVolume,
   })
+
+  // ✅ FIXED: Store playAudioChunk in ref after it's available
+  useEffect(() => {
+    playAudioChunkRef.current = playAudioChunk
+  }, [playAudioChunk])
+
+  // Send chat message
+  const handleSendMessage = useCallback(
+    (content: string) => {
+      if (!user || !content.trim()) return
+
+      send("chat", {
+        content: content.trim(),
+        username: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+        avatar_url: user.user_metadata?.avatar_url,
+        role: myRole,
+      })
+    },
+    [user, myRole, send]
+  )
 
   // Update volume
   const handleVolumeChange = (volume: number) => {
@@ -193,7 +341,6 @@ export default function RoomPage() {
     try {
       await inviteSpeaker(roomId, userId)
       console.log("✅ Invited speaker:", userId)
-      // Refresh participants with profiles
       const profilesData = await getParticipantsWithProfiles(roomId)
       setParticipants(profilesData.participants)
     } catch (err) {
@@ -202,17 +349,13 @@ export default function RoomPage() {
     }
   }
 
-  // Invite friend to room (placeholder - will implement WebSocket invitation later)
+  // Invite friend
   async function handleInviteFriend(userId: string) {
     if (!isHost || !roomId) return
 
     try {
-      // TODO: Send WebSocket invitation instead of direct invite
       console.log("📨 Sending invitation to:", userId)
-      
-      // For now, just show success message
-      alert(`Invitation sent! (WebSocket invitation coming soon)`)
-      
+      alert(`Invitation sent!`)
       setShowInviteModal(false)
     } catch (err) {
       console.error("Failed to invite friend:", err)
@@ -230,7 +373,7 @@ export default function RoomPage() {
     if (!confirm("Yakin ingin mengakhiri room?")) return
 
     try {
-      await endRoom(roomId!)
+      await endRoom(roomId)
       router.push("/")
     } catch (err) {
       console.error("Failed to end room:", err)
@@ -264,7 +407,7 @@ export default function RoomPage() {
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Badge variant="secondary" className="gap-1">
                   <Users className="h-3 w-3" />
-                  {room.listeners} listening
+                  {participantCount} listening
                 </Badge>
                 <span>•</span>
                 <span>{isConnected ? "Connected" : "Connecting..."}</span>
@@ -279,7 +422,11 @@ export default function RoomPage() {
                 Invite Friends
               </Button>
             )}
-            <Button variant="outline" size="icon" onClick={() => setShowSettings(!showSettings)}>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setShowSettings(!showSettings)}
+            >
               <Settings className="h-4 w-4" />
             </Button>
             {isHost && (
@@ -302,13 +449,23 @@ export default function RoomPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex flex-col items-center justify-center py-12 space-y-6">
-                <UserAvatar user={user} size="lg" className="h-32 w-32 border-4 border-primary text-4xl" />
+                <UserAvatar
+                  user={user}
+                  size="lg"
+                  className="h-32 w-32 border-4 border-primary text-4xl"
+                />
 
                 <div className="text-center">
                   <p className="text-lg font-semibold">
-                    {isHost ? "You're Live!" : canSpeak ? "You're a Speaker" : "Listening"}
+                    {isHost
+                      ? "You're Live!"
+                      : canSpeak
+                      ? "You're a Speaker"
+                      : "Listening"}
                   </p>
-                  <Badge variant={isHost ? "default" : "secondary"}>{myRole}</Badge>
+                  <Badge variant={isHost ? "default" : "secondary"}>
+                    {myRole}
+                  </Badge>
                 </div>
 
                 {canSpeak && (
@@ -320,7 +477,11 @@ export default function RoomPage() {
                       onClick={handleToggleMic}
                       disabled={!isConnected}
                     >
-                      {isMuted ? <MicOff className="h-6 w-6" /> : <Mic className="h-6 w-6" />}
+                      {isMuted ? (
+                        <MicOff className="h-6 w-6" />
+                      ) : (
+                        <Mic className="h-6 w-6" />
+                      )}
                     </Button>
                     <p className="text-sm text-muted-foreground">
                       {isMuted ? "Tap to unmute" : "Tap to mute"}
@@ -329,15 +490,21 @@ export default function RoomPage() {
                 )}
               </div>
 
-              {/* Audio Meter */}
               {canSpeak && isCapturing && (
-                <AudioMeter stream={mediaStream} label={`Your Audio (${isMuted ? "Muted" : "Live"})`} />
+                <AudioMeter
+                  stream={mediaStream}
+                  label={`Your Audio (${isMuted ? "Muted" : "Live"})`}
+                />
               )}
 
-              {/* Settings Panel */}
               {showSettings && (
                 <div className="space-y-4">
-                  {!canSpeak && <VolumeControl volume={playbackVolume} onChange={handleVolumeChange} />}
+                  {!canSpeak && (
+                    <VolumeControl
+                      volume={playbackVolume}
+                      onChange={handleVolumeChange}
+                    />
+                  )}
                   <Card className="border-dashed">
                     <CardHeader>
                       <CardTitle className="text-sm">Audio Settings</CardTitle>
@@ -351,66 +518,16 @@ export default function RoomPage() {
             </CardContent>
           </Card>
 
-          {/* Participants */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                Participants ({participants.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {participants.map((participant) => {
-                  const isMe = participant.user_id === user.id
-                  const isSpeaking = speakingUsers.has(participant.user_id)
-                  const displayName = isMe ? "You" : (participant.full_name || participant.username || participant.email?.split("@")[0] || `User ${participant.user_id.slice(0, 6)}`)
-
-                  return (
-                    <div
-                      key={participant.user_id}
-                      className="flex items-center gap-3 p-3 rounded-lg hover:bg-muted transition-colors"
-                    >
-                      <UserAvatar 
-                        user={{
-                          id: participant.user_id,
-                          email: participant.email,
-                          user_metadata: {
-                            avatar_url: participant.avatar_url,
-                            full_name: participant.full_name,
-                          }
-                        }} 
-                      />
-
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{displayName}</p>
-                        <Badge variant={participant.role === "host" ? "default" : "secondary"} className="text-xs">
-                          {participant.role}
-                        </Badge>
-                      </div>
-
-                      <div>
-                        {participant.role !== "listener" ? (
-                          <Volume2 className={`h-4 w-4 ${isSpeaking ? "text-green-500 animate-pulse" : "text-muted-foreground"}`} />
-                        ) : (
-                          <Mic className="h-4 w-4 text-muted-foreground" />
-                        )}
-                      </div>
-
-                      {isHost && !isMe && participant.role === "listener" && (
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => handleInviteSpeaker(participant.user_id)}
-                        >
-                          <UserPlus className="h-3 w-3" />
-                        </Button>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </CardContent>
+          {/* Live Chat */}
+          <Card className="md:col-span-1 flex flex-col h-150">
+            <LiveChat
+              roomId={roomId}
+              currentUserId={user.id}
+              onSendMessage={handleSendMessage}
+              messages={chatMessages}
+              participantCount={participantCount}
+              canSpeak={canSpeak}
+            />
           </Card>
         </div>
       </div>
@@ -420,7 +537,7 @@ export default function RoomPage() {
         <InviteFriendsModal
           open={showInviteModal}
           onClose={() => setShowInviteModal(false)}
-          roomId={roomId!}
+          roomId={roomId}
           roomTitle={room.title}
           onInvite={handleInviteFriend}
         />

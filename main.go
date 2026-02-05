@@ -87,6 +87,7 @@ func main() {
 	mux.HandleFunc("GET /users/search", withAuth(social.SearchUsers))
 	mux.HandleFunc("POST /presence/online", withAuth(social.SetPresenceOnline))
 	mux.HandleFunc("POST /presence/offline", withAuth(social.SetPresenceOffline))
+	mux.HandleFunc("GET /social/is-friend/", withAuth(social.CheckIsFriend))
 
 	// ======================
 	// CORS + START SERVER
@@ -206,6 +207,13 @@ func handleRoomRoutes(w http.ResponseWriter, r *http.Request) {
 
 	case r.Method == "GET" && action == "participants-with-profiles":
 		room.GetParticipantsWithProfilesHandler(w, r)
+		
+	case r.Method == "POST" && action == "join":
+    // Use new handler that accepts role preference
+    auth.AuthMiddleware(http.HandlerFunc(room.JoinRoomWithRole)).ServeHTTP(w, r)
+    
+    // OR if keeping old handler:
+    auth.AuthMiddleware(http.HandlerFunc(room.JoinRoom)).ServeHTTP(w, r)
 
 	default:
 		http.Error(w, "not found", http.StatusNotFound)

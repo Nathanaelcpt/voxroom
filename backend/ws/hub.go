@@ -1,39 +1,45 @@
+// backend/ws/hub.go - UPDATED with Chat Support
 package ws
 
 import (
+	"context"
 	"log"
+	"time"
 
+	"voxroom/backend/db"
 	"voxroom/backend/room"
-	"voxroom/backend/webrtc"
 )
 
-// Hub maintains active clients and broadcasts messages to them
+// Hub maintains the set of active clients and broadcasts messages to clients
 type Hub struct {
-	// Room ID -> Set of clients in that room
+	// Registered clients per room
 	Rooms map[string]map[*Client]bool
 
-	// Channels for hub operations
-	Register   chan *Client
-	Unregister chan *Client
-	Broadcast  chan Message
+	// Register requests from clients
+	Register chan *Client
 
-	// ✅ Audio handler for WebRTC streaming
-	AudioHandler *webrtc.AudioHandler
+	// Unregister requests from clients
+	Unregister chan *Client
+
+	// Inbound messages from clients
+	Broadcast chan Message
 }
 
-// NewHub creates a new Hub instance
+// NewHub creates a new WebSocket hub
 func NewHub() *Hub {
 	return &Hub{
-		Rooms:        make(map[string]map[*Client]bool),
-		Register:     make(chan *Client),
-		Unregister:   make(chan *Client),
-		Broadcast:    make(chan Message),
-		AudioHandler: webrtc.NewAudioHandler(), // ✅ Initialize audio handler
+		Rooms:      make(map[string]map[*Client]bool),
+		Register:   make(chan *Client),
+		Unregister: make(chan *Client),
+		Broadcast:  make(chan Message, 256),
 	}
 }
 
-// Run starts the hub's main event loop
+// Run starts the hub's main loop
 func (h *Hub) Run() {
+	cleanupTicker := time.NewTicker(30 * time.Second)
+	defer cleanupTicker.Stop()
+
 	for {
 		select {
 		case client := <-h.Register:
@@ -44,236 +50,261 @@ func (h *Hub) Run() {
 
 		case message := <-h.Broadcast:
 			h.handleBroadcast(message)
+
+		case <-cleanupTicker.C:
+			h.cleanupStaleConnections()
 		}
 	}
 }
 
-// handleRegister processes new client registrations
-func (h *Hub) handleRegister(c *Client) {
-	// 1. Create room if not exists
-	if h.Rooms[c.RoomID] == nil {
-		h.Rooms[c.RoomID] = make(map[*Client]bool)
+// handleRegister registers a new client
+func (h *Hub) handleRegister(client *Client) {
+	// Get user's role from database
+	userRole, canSpeak := room.GetUserRoleInRoom(client.RoomID, client.UserID)
+	client.Role = string(userRole)
+	client.CanSpeak = canSpeak
+
+	// Create room if doesn't exist
+	if h.Rooms[client.RoomID] == nil {
+		h.Rooms[client.RoomID] = make(map[*Client]bool)
+		log.Printf("🏠 Created new room: %s", client.RoomID)
 	}
 
-	// 2. Add client to room
-	h.Rooms[c.RoomID][c] = true
+	// Add client to room
+	h.Rooms[client.RoomID][client] = true
 
-	// 3. Get role from database
-	role, canSpeak := room.GetUserRoleInRoom(c.RoomID, c.UserID)
-	c.Role = string(role)
-	c.CanSpeak = canSpeak
+	log.Printf("✅ Client registered: user=%s, room=%s, role=%s, can_speak=%v, total_in_room=%d",
+		client.UserID, client.RoomID, client.Role, client.CanSpeak, len(h.Rooms[client.RoomID]))
 
-	log.Printf("✅ Client registered: user=%s, room=%s, role=%s, can_speak=%v",
-		c.UserID, c.RoomID, c.Role, c.CanSpeak)
+	// Update user presence in database
+	go h.updatePresence(client.UserID, "online", &client.RoomID)
 
-	// 4. Send role info to client
-	c.Send <- Message{
-		Type:   MsgTypeRoleAssigned,
-		RoomID: c.RoomID,
-		Payload: map[string]interface{}{
-			"role":      c.Role,
-			"can_speak": c.CanSpeak,
+	// ✅ Broadcast user joined event
+	h.broadcastToRoom(client.RoomID, Message{
+		Type:   "user_joined",
+		RoomID: client.RoomID,
+		From:   client.UserID,
+		Data: map[string]interface{}{
+			"user_id":  client.UserID,
+			"username": client.Username, // Set from client
+			"role":     client.Role,
+			"can_speak": client.CanSpeak,
 		},
-	}
+	}, nil)
 
-	// 5. Broadcast updated listener count
-	h.broadcastListenerCount(c.RoomID)
+	// Send current room state to new client
+	h.sendRoomState(client)
+
+	// ✅ Update listener count
+	h.broadcastListenerCount(client.RoomID)
 }
 
-// handleUnregister processes client disconnections
-func (h *Hub) handleUnregister(c *Client) {
-	roomClients, exists := h.Rooms[c.RoomID]
-	if !exists {
-		return
-	}
-
-	// 1. Remove client from room
-	delete(roomClients, c)
-
-	// 2. Close send channel
-	select {
-	case <-c.Send:
-	default:
-		close(c.Send)
-	}
-
-	log.Printf("🔌 Client unregistered: user=%s, room=%s, role=%s",
-		c.UserID, c.RoomID, c.Role)
-
-	// ✅ 3. Stop audio stream if user was streaming
-	h.AudioHandler.HandleUserLeft(c.UserID)
-
-	// 4. Broadcast updated listener count
-	h.broadcastListenerCount(c.RoomID)
-
-	// 5. Clean up empty room from hub memory only (not from DB)
-	if len(roomClients) == 0 {
-		delete(h.Rooms, c.RoomID)
-		log.Printf("🧹 Room %s cleaned up from hub (no active WebSocket clients)", c.RoomID)
-	}
-}
-
-// handleBroadcast processes message broadcasts to room participants
-func (h *Hub) handleBroadcast(msg Message) {
-	roomClients, exists := h.Rooms[msg.RoomID]
-	if !exists {
-		return
-	}
-
-	// ✅ Handle special message types with switch
-	switch msg.Type {
-	case MsgTypeAudio:
-		h.handleAudioBroadcast(msg, roomClients)
-		return
-
-	case MsgTypeMicOn:
-		h.AudioHandler.HandleMicOn(msg.From, msg.RoomID)
-
-	case MsgTypeMicOff:
-		h.AudioHandler.HandleMicOff(msg.From, msg.RoomID)
-	}
-
-	// Regular message broadcast
-	for client := range roomClients {
-		// Don't send message back to sender
-		if client.UserID == msg.From {
-			continue
-		}
-
-		// Filter messages based on permissions
-		if !h.shouldReceiveMessage(client, msg) {
-			continue
-		}
-
-		// Try to send, remove client if channel is full
-		select {
-		case client.Send <- msg:
-			// Message sent successfully
-		default:
-			// Channel full, remove client
-			log.Printf("⚠️ Client %s send channel full, removing", client.UserID)
+// handleUnregister unregisters a client
+func (h *Hub) handleUnregister(client *Client) {
+	if clients, ok := h.Rooms[client.RoomID]; ok {
+		if _, exists := clients[client]; exists {
+			delete(clients, client)
 			close(client.Send)
-			delete(roomClients, client)
+
+			log.Printf("🔌 Client unregistered: user=%s, room=%s, remaining=%d",
+				client.UserID, client.RoomID, len(clients))
+
+			// Update presence
+			go h.updatePresence(client.UserID, "offline", nil)
+
+			// ✅ Broadcast user left event
+			h.broadcastToRoom(client.RoomID, Message{
+				Type:   "user_left",
+				RoomID: client.RoomID,
+				From:   client.UserID,
+				Data: map[string]interface{}{
+					"user_id":  client.UserID,
+					"username": client.Username,
+					"role":     client.Role,
+				},
+			}, nil)
+
+			// ✅ Update listener count
+			h.broadcastListenerCount(client.RoomID)
+
+			// Clean up empty room
+			if len(clients) == 0 {
+				delete(h.Rooms, client.RoomID)
+				log.Printf("🗑️  Removed empty room: %s", client.RoomID)
+			}
 		}
 	}
 }
 
-// ✅ handleAudioBroadcast broadcasts audio to all eligible clients
-func (h *Hub) handleAudioBroadcast(msg Message, roomClients map[*Client]bool) {
-	// Process audio chunk
-	if payload, ok := msg.Payload.(map[string]interface{}); ok {
-		if chunk, ok := payload["chunk"].(string); ok {
-			// Validate and log audio chunk
-			if err := h.AudioHandler.HandleAudioChunk(msg.From, msg.RoomID, chunk); err != nil {
-				// Error logged in handler
-				return
-			}
-
-			// Broadcast to all clients who should receive audio
-			broadcastCount := 0
-			for client := range roomClients {
-				// Don't send back to sender
-				if client.UserID == msg.From {
-					continue
-				}
-
-				// ✅ All users can receive audio from speakers/host
-				// Permission check happens in shouldReceiveMessage
-				if h.shouldReceiveMessage(client, msg) {
-					select {
-					case client.Send <- msg:
-						broadcastCount++
-					default:
-						// Skip if channel full (audio is real-time, don't block)
-					}
-				}
-			}
-
-			// Periodic logging (every 100 chunks to avoid spam)
-			// You can remove this or adjust the frequency
-			// if broadcastCount > 0 && msg.From != "" {
-			// 	log.Printf("🔊 Audio broadcast: from=%s, to=%d listeners", msg.From[:8], broadcastCount)
-			// }
-		}
-	}
-}
-
-// shouldReceiveMessage checks if a client should receive a message based on permissions
-func (h *Hub) shouldReceiveMessage(c *Client, msg Message) bool {
-	// ✅ Audio messages: everyone can receive audio from host/speakers
-	if msg.Type == MsgTypeAudio {
-		return true // Sender already filtered out in handleAudioBroadcast
-	}
-
-	// Mic control messages only for speakers
-	micMessages := map[string]bool{
-		MsgTypeMicOn:  true,
-		MsgTypeMicOff: true,
-	}
-
-	if micMessages[msg.Type] {
-		return c.CanSpeak
-	}
-
-	// All other messages are broadcast to everyone
-	return true
-}
-
-// EndRoom closes a room and notifies all participants.
-// Called only from EndRoomHandler via explicit POST /rooms/{id}/end.
-func (h *Hub) EndRoom(roomID string) {
-	roomClients, exists := h.Rooms[roomID]
-	if !exists {
-		log.Printf("ℹ️ EndRoom: no active WebSocket clients in room %s", roomID)
+// handleBroadcast broadcasts a message to the appropriate recipients
+func (h *Hub) handleBroadcast(message Message) {
+	// Validate message has required fields
+	if message.RoomID == "" {
+		log.Printf("⚠️ Broadcast message missing room_id")
 		return
 	}
 
-	// 1. Notify all clients that room ended
-	for client := range roomClients {
+	// Get room clients
+	clients, ok := h.Rooms[message.RoomID]
+	if !ok {
+		log.Printf("⚠️ Broadcast to non-existent room: %s", message.RoomID)
+		return
+	}
+
+	// ✅ Handle different message types
+	switch message.Type {
+	case "chat":
+		// Chat messages go to everyone
+		h.broadcastToRoom(message.RoomID, message, nil)
+		log.Printf("💬 Chat message: room=%s, from=%s", message.RoomID, message.From)
+
+	case "audio":
+		// Audio doesn't go back to sender
+		for client := range clients {
+			if client.UserID == message.From {
+				continue
+			}
+			select {
+			case client.Send <- message:
+			default:
+				close(client.Send)
+				delete(clients, client)
+			}
+		}
+
+	case "mic_on", "mic_off", "speaking":
+		// Broadcast to all including sender (for UI updates)
+		h.broadcastToRoom(message.RoomID, message, nil)
+
+	default:
+		// Default: broadcast to all
+		h.broadcastToRoom(message.RoomID, message, nil)
+	}
+}
+
+// broadcastToRoom sends a message to all clients in a room
+func (h *Hub) broadcastToRoom(roomID string, message Message, excludeClient *Client) {
+	clients, ok := h.Rooms[roomID]
+	if !ok {
+		return
+	}
+
+	for client := range clients {
+		if excludeClient != nil && client == excludeClient {
+			continue
+		}
+
 		select {
-		case client.Send <- Message{
-			Type:   MsgTypeRoomEnded,
-			RoomID: roomID,
-		}:
+		case client.Send <- message:
 		default:
+			close(client.Send)
+			delete(clients, client)
 		}
-		close(client.Send)
-		
-		// ✅ Stop audio streams
-		h.AudioHandler.HandleUserLeft(client.UserID)
 	}
-
-	// 2. Remove room from hub
-	delete(h.Rooms, roomID)
-
-	log.Printf("✅ Hub: broadcasted room_ended to all clients in room %s", roomID)
 }
 
-// broadcastListenerCount sends updated listener count to all clients in a room
+// ✅ NEW: Broadcast listener count
 func (h *Hub) broadcastListenerCount(roomID string) {
-	roomClients, exists := h.Rooms[roomID]
-	if !exists {
+	clients, ok := h.Rooms[roomID]
+	if !ok {
 		return
 	}
 
-	count := len(roomClients)
-	msg := Message{
-		Type:   MsgTypeListenerCount,
+	count := len(clients)
+
+	h.broadcastToRoom(roomID, Message{
+		Type:   "listener_count",
 		RoomID: roomID,
-		Payload: map[string]int{
+		Data: map[string]interface{}{
 			"count": count,
 		},
+	}, nil)
+}
+
+// sendRoomState sends current room participants to a newly joined client
+func (h *Hub) sendRoomState(client *Client) {
+	clients, ok := h.Rooms[client.RoomID]
+	if !ok {
+		return
 	}
 
-	for client := range roomClients {
-		select {
-		case client.Send <- msg:
-			// Sent successfully
-		default:
-			// Skip if channel full
-			log.Printf("⚠️ Skipped listener count update for user %s (channel full)", client.UserID)
+	var participants []map[string]interface{}
+	for c := range clients {
+		if c.UserID == client.UserID {
+			continue // Skip self
 		}
+
+		participants = append(participants, map[string]interface{}{
+			"user_id":   c.UserID,
+			"username":  c.Username,
+			"role":      c.Role,
+			"can_speak": c.CanSpeak,
+		})
 	}
 
-	log.Printf("📊 Broadcasted listener count: room=%s, count=%d", roomID, count)
+	// Send room state to client
+	select {
+	case client.Send <- Message{
+		Type:   "room_state",
+		RoomID: client.RoomID,
+		Data: map[string]interface{}{
+			"participants": participants,
+			"total":        len(clients),
+		},
+	}:
+		log.Printf("📋 Sent room state to user %s: %d participants", client.UserID, len(participants))
+	default:
+		log.Printf("⚠️ Failed to send room state to user %s", client.UserID)
+	}
+}
+
+// cleanupStaleConnections removes connections that haven't been active
+func (h *Hub) cleanupStaleConnections() {
+	// Placeholder for future ping/pong mechanism
+}
+
+// updatePresence updates user presence in database
+func (h *Hub) updatePresence(userID, status string, roomID *string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO public.user_presence (user_id, status, current_room_id, last_seen, updated_at)
+		VALUES ($1::uuid, $2, $3, NOW(), NOW())
+		ON CONFLICT (user_id) DO UPDATE SET
+			status = EXCLUDED.status,
+			current_room_id = EXCLUDED.current_room_id,
+			last_seen = NOW(),
+			updated_at = NOW()
+	`, userID, status, roomID)
+
+	if err != nil {
+		log.Printf("⚠️ Failed to update presence for user %s: %v", userID, err)
+	}
+}
+
+// GetRoomClientCount returns number of clients in a room
+func (h *Hub) GetRoomClientCount(roomID string) int {
+	if clients, ok := h.Rooms[roomID]; ok {
+		return len(clients)
+	}
+	return 0
+}
+
+// GetTotalClients returns total number of connected clients
+func (h *Hub) GetTotalClients() int {
+	total := 0
+	for _, clients := range h.Rooms {
+		total += len(clients)
+	}
+	return total
+}
+
+// GetRoomList returns list of active room IDs
+func (h *Hub) GetRoomList() []string {
+	rooms := make([]string, 0, len(h.Rooms))
+	for roomID := range h.Rooms {
+		rooms = append(rooms, roomID)
+	}
+	return rooms
 }
