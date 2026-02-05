@@ -31,18 +31,26 @@ interface LiveChatProps {
   onMakeSpeaker?: (userId: string) => void
 }
 
-/* ================= ROLE UI ================= */
-
-const roleColor: Record<string, string> = {
+const roleColor = {
   host: "text-yellow-500",
   speaker: "text-blue-500",
   listener: "text-muted-foreground",
 }
 
-const roleIcon: Record<string, string> = {
+const roleIcon = {
   host: "👑",
   speaker: "🎤",
   listener: "👂",
+}
+
+function formatTime(date: Date) {
+  const diff = Date.now() - date.getTime()
+  if (diff < 60_000) return "just now"
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+  return date.toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
 }
 
 export function LiveChat({
@@ -56,7 +64,6 @@ export function LiveChat({
   const [message, setMessage] = useState("")
   const endRef = useRef<HTMLDivElement>(null)
 
-  /* ================= AUTOSCROLL ================= */
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
@@ -69,7 +76,6 @@ export function LiveChat({
 
   return (
     <Card className="flex flex-col h-full min-h-105">
-      {/* HEADER */}
       <CardHeader className="border-b py-3">
         <CardTitle className="flex items-center justify-between text-sm">
           <div className="flex items-center gap-2">
@@ -84,10 +90,8 @@ export function LiveChat({
       </CardHeader>
 
       <CardContent className="flex-1 flex flex-col p-0">
-        {/* ================= MESSAGES ================= */}
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
           {messages.map((msg) => {
-            /* SYSTEM / EVENT MESSAGE */
             if (msg.type !== "chat") {
               return (
                 <div
@@ -100,17 +104,11 @@ export function LiveChat({
             }
 
             const isOwn = msg.user_id === currentUserId
-
-            // 🔑 DEFENSIVE CHECK (INI PENTING)
             const isListener =
               msg.role !== "host" && msg.role !== "speaker"
 
             return (
-              <div
-                key={msg.id}
-                className="flex items-start gap-2 group"
-              >
-                {/* AVATAR */}
+              <div key={msg.id} className="flex items-start gap-2 group">
                 <UserAvatar
                   user={{
                     id: msg.user_id || msg.id,
@@ -123,9 +121,7 @@ export function LiveChat({
                   size="sm"
                 />
 
-                {/* MESSAGE BODY */}
                 <div className="flex-1 min-w-0">
-                  {/* USERNAME + ROLE */}
                   <div className="flex items-center gap-1 text-xs">
                     <span
                       className={cn(
@@ -135,21 +131,21 @@ export function LiveChat({
                     >
                       {msg.username}
                     </span>
-
                     {msg.role && (
                       <span className="opacity-70">
                         {roleIcon[msg.role]}
                       </span>
                     )}
+                    <span className="ml-1 text-[10px] text-muted-foreground">
+                      {formatTime(msg.timestamp)}
+                    </span>
                   </div>
 
-                  {/* MESSAGE CONTENT */}
                   <div className="text-sm wrap-break-word">
                     {msg.content}
                   </div>
                 </div>
 
-                {/* ================= HOST MENU (⋮) ================= */}
                 {isHost &&
                   !isOwn &&
                   isListener &&
@@ -160,12 +156,11 @@ export function LiveChat({
                         <Button
                           size="icon"
                           variant="ghost"
-                          className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="h-7 w-7 opacity-0 group-hover:opacity-100"
                         >
                           <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-
                       <DropdownMenuContent align="end">
                         <DropdownMenuItem
                           onClick={() => onMakeSpeaker(msg.user_id!)}
@@ -180,25 +175,18 @@ export function LiveChat({
               </div>
             )
           })}
-
           <div ref={endRef} />
         </div>
 
-        {/* ================= INPUT ================= */}
         <div className="border-t p-3">
           <div className="flex gap-2">
             <Input
               placeholder="Ketik pesan..."
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleSend()
-              }}
+              onKeyDown={(e) => e.key === "Enter" && handleSend()}
             />
-            <Button
-              onClick={handleSend}
-              disabled={!message.trim()}
-            >
+            <Button onClick={handleSend} disabled={!message.trim()}>
               <Send className="h-4 w-4" />
             </Button>
           </div>
