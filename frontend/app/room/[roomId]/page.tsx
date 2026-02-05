@@ -35,6 +35,7 @@ import type { ChatMessage } from "@/app/types/chat"
 import { usePresence } from "@/hooks/use-presence"
 
 export default function RoomPage() {
+  /* ================= BASIC HOOKS ================= */
   const params = useParams()
   const router = useRouter()
   const { user } = useUser()
@@ -42,6 +43,7 @@ export default function RoomPage() {
   const roomId = params?.roomId as string | undefined
   usePresence({ roomId })
 
+  /* ================= STATE ================= */
   const [room, setRoom] = useState<RoomDetail | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [participantCount, setParticipantCount] = useState(0)
@@ -63,21 +65,17 @@ export default function RoomPage() {
   >(null)
 
   /* ================= LOAD ROOM ================= */
-
   useEffect(() => {
-    // 1️⃣ Guard awal (paling gampang dipahami)
     if (!roomId || !user) {
       setLoading(false)
       return
     }
 
-    // 2️⃣ Salin ke variabel lokal (INI KUNCI BIAR TS DIAM)
     const safeRoomId = roomId
     const safeUser = user
 
     async function loadRoom() {
       try {
-        // 3️⃣ Pakai variabel yang sudah pasti aman
         const data = await getRoomDetails(safeRoomId)
         setRoom(data)
 
@@ -88,14 +86,11 @@ export default function RoomPage() {
         const me = data.participants.find(
           (p) => p.user_id === safeUser.id
         )
-        if (me) {
-          setMyRole(me.role)
-        }
+        if (me) setMyRole(me.role)
 
         setRoomLoaded(true)
       } catch (err) {
         console.error("Failed to load room:", err)
-        alert("Room tidak ditemukan")
         router.push("/")
       } finally {
         setLoading(false)
@@ -105,26 +100,7 @@ export default function RoomPage() {
     loadRoom()
   }, [roomId, user, router])
 
-
-  /* ================= HARD GUARD (TS KUNCI) ================= */
-
-  if (!roomId || !user || loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-      </div>
-    )
-  }
-
-  /* 🔒 SETELAH INI:
-     - roomId = string
-     - user   = non-null
-  */
-  const safeRoomId: string = roomId
-  const safeUser = user
-
   /* ================= WEBSOCKET ================= */
-
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       const payload = message.payload
@@ -135,24 +111,24 @@ export default function RoomPage() {
           if (!payload.user_id || !payload.role) return
           const role = payload.role as Role
 
-          setParticipants(prev =>
-            prev.map(p =>
+          setParticipants((prev) =>
+            prev.map((p) =>
               p.user_id === payload.user_id ? { ...p, role } : p
             )
           )
 
-          if (payload.user_id === safeUser.id) {
+          if (payload.user_id === user?.id) {
             setMyRole(role)
           }
           break
         }
 
         case "user_joined":
-          setParticipantCount(p => p + 1)
+          setParticipantCount((p) => p + 1)
           break
 
         case "user_left":
-          setParticipantCount(p => Math.max(0, p - 1))
+          setParticipantCount((p) => Math.max(0, p - 1))
           break
 
         case "chat": {
@@ -164,10 +140,10 @@ export default function RoomPage() {
             content: payload.content,
             timestamp: new Date(payload.timestamp || Date.now()),
             avatar_url: payload.avatar_url,
-            role: (payload.role as Role) || "listener", // 🔑 utk ⋮
+            role: (payload.role as Role) || "listener",
             user_id: payload.user_id,
           }
-          setChatMessages(prev => [...prev, msg])
+          setChatMessages((prev) => [...prev, msg])
           break
         }
 
@@ -183,14 +159,15 @@ export default function RoomPage() {
           break
       }
     },
-    [safeUser]
+    [user]
   )
 
   const { isConnected, send, sendAudioChunk } = useWebSocket({
-    roomId: roomLoaded ? safeRoomId : "",
+    roomId: roomLoaded && roomId ? roomId : "",
     onMessage: handleWSMessage,
   })
 
+  /* ================= AUDIO ================= */
   const {
     isCapturing,
     mediaStream,
@@ -210,7 +187,6 @@ export default function RoomPage() {
   }, [playAudioChunk])
 
   /* ================= ACTIONS ================= */
-
   function handleToggleMic() {
     if (!canSpeak) return
     const next = !isMuted
@@ -218,26 +194,34 @@ export default function RoomPage() {
     send(next ? "mic_off" : "mic_on")
   }
 
-  async function handleMakeSpeaker(userId: string): Promise<void> {
-    if (!isHost) return
-    await makeSpeaker(safeRoomId, userId)
+  async function handleMakeSpeaker(userId: string) {
+    if (!isHost || !roomId) return
+    await makeSpeaker(roomId, userId)
   }
 
-  async function handleInviteFriend(userId: string): Promise<void> {
-    console.log("Invite:", userId, "to room:", safeRoomId)
+  async function handleInviteFriend(userId: string) {
+    console.log("Invite:", userId)
   }
 
   async function handleEndRoom() {
-    if (!isHost) return
+    if (!isHost || !roomId) return
     if (!confirm("Yakin ingin mengakhiri room?")) return
-    await endRoom(safeRoomId)
+    await endRoom(roomId)
     router.push("/")
   }
 
-  if (!room) return null
+  /* ================= RENDER GUARD (AMAN) ================= */
+  const isReady = !loading && room && roomId && user
+
+  if (!isReady) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    )
+  }
 
   /* ================= UI ================= */
-
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -267,7 +251,7 @@ export default function RoomPage() {
             <Button
               variant="outline"
               size="icon"
-              onClick={() => setShowSettings(v => !v)}
+              onClick={() => setShowSettings((v) => !v)}
             >
               <Settings className="h-4 w-4" />
             </Button>
@@ -321,7 +305,7 @@ export default function RoomPage() {
               <CardTitle>Live Stage</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6 text-center">
-              <UserAvatar user={safeUser} size="lg" />
+              <UserAvatar user={user} size="lg" />
               <Badge>{myRole}</Badge>
 
               {canSpeak && (
@@ -338,32 +322,32 @@ export default function RoomPage() {
 
           {/* CHAT */}
           <LiveChat
-            roomId={safeRoomId}
-            currentUserId={safeUser.id}
+            roomId={roomId}
+            currentUserId={user.id}
             messages={chatMessages}
             participantCount={participantCount}
             isHost={isHost}
-            onSendMessage={(content) => {
+            onSendMessage={(content) =>
               send("chat", {
                 content,
                 username:
-                  safeUser.user_metadata?.full_name ||
-                  safeUser.email?.split("@")[0] ||
+                  user.user_metadata?.full_name ||
+                  user.email?.split("@")[0] ||
                   "User",
-                avatar_url: safeUser.user_metadata?.avatar_url,
+                avatar_url: user.user_metadata?.avatar_url,
                 role: myRole,
               })
-            }}
+            }
             onMakeSpeaker={handleMakeSpeaker}
           />
         </div>
       </div>
 
-      {isHost && room && (
+      {isHost && (
         <InviteFriendsModal
           open={showInviteModal}
           onClose={() => setShowInviteModal(false)}
-          roomId={safeRoomId}
+          roomId={roomId}
           roomTitle={room.title}
           onInvite={handleInviteFriend}
         />
