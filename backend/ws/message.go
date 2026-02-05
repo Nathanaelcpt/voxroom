@@ -1,22 +1,27 @@
 package ws
 
-// Message represents a WebSocket message between clients
+// Message represents a WebSocket message
 type Message struct {
-	Type    string                 `json:"type"`
-	RoomID  string                 `json:"room_id,omitempty"`
-	From    string                 `json:"from,omitempty"`
-	Payload interface{}            `json:"payload,omitempty"` // ✅ For audio chunks, etc.
-	Data    map[string]interface{} `json:"data,omitempty"`    // ✅ NEW: For chat, events, etc.
+	Type   string                 `json:"type"`
+	RoomID string                 `json:"room_id,omitempty"`
+	From   string                 `json:"from,omitempty"`
+	
+	// ✅ KHUSUS AUDIO / BINARY
+	Payload interface{}            `json:"payload,omitempty"`
+
+	// ✅ KHUSUS CHAT / EVENT
+	Data    map[string]interface{} `json:"data,omitempty"`
 }
 
-// Common message types
+// Message types
 const (
-	MsgTypeAudio         = "audio"
-	MsgTypeMicOn         = "mic_on"
-	MsgTypeMicOff        = "mic_off"
-	MsgTypeSpeaking      = "speaking"
-	MsgTypeRoleAssigned  = "role_assigned"
-	MsgTypeRoleUpdated   = "role_updated"
-	MsgTypeListenerCount = "listener_count"
-	MsgTypeRoomEnded     = "room_ended"
+	MsgChat         = "chat"
+	MsgAudio        = "audio"
+	MsgMicOn        = "mic_on"
+	MsgMicOff       = "mic_off"
+	MsgSpeaking     = "speaking"
+	MsgRoleAssigned = "role_assigned"
+	MsgRoleUpdated  = "role_updated"
+	MsgListenerCnt  = "listener_count"
+	MsgRoomEnded    = "room_ended"
 )

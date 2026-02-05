@@ -1,4 +1,4 @@
-// backend/ws/hub.go - UPDATED with Chat Support
+// backend/ws/hub.go - FINAL
 package ws
 
 import (
@@ -10,22 +10,14 @@ import (
 	"voxroom/backend/room"
 )
 
-// Hub maintains the set of active clients and broadcasts messages to clients
+// Hub manages active websocket clients per room
 type Hub struct {
-	// Registered clients per room
-	Rooms map[string]map[*Client]bool
-
-	// Register requests from clients
-	Register chan *Client
-
-	// Unregister requests from clients
+	Rooms      map[string]map[*Client]bool
+	Register   chan *Client
 	Unregister chan *Client
-
-	// Inbound messages from clients
-	Broadcast chan Message
+	Broadcast  chan Message
 }
 
-// NewHub creates a new WebSocket hub
 func NewHub() *Hub {
 	return &Hub{
 		Rooms:      make(map[string]map[*Client]bool),
@@ -35,11 +27,7 @@ func NewHub() *Hub {
 	}
 }
 
-// Run starts the hub's main loop
 func (h *Hub) Run() {
-	cleanupTicker := time.NewTicker(30 * time.Second)
-	defer cleanupTicker.Stop()
-
 	for {
 		select {
 		case client := <-h.Register:
@@ -48,168 +36,190 @@ func (h *Hub) Run() {
 		case client := <-h.Unregister:
 			h.handleUnregister(client)
 
-		case message := <-h.Broadcast:
-			h.handleBroadcast(message)
-
-		case <-cleanupTicker.C:
-			h.cleanupStaleConnections()
+		case msg := <-h.Broadcast:
+			h.handleBroadcast(msg)
 		}
 	}
 }
 
-// handleRegister registers a new client
+/* ================= REGISTER ================= */
+
 func (h *Hub) handleRegister(client *Client) {
-	// Get user's role from database
-	userRole, canSpeak := room.GetUserRoleInRoom(client.RoomID, client.UserID)
-	client.Role = string(userRole)
+	// 🔑 ROLE SOURCE OF TRUTH
+	role, canSpeak := room.GetUserRoleInRoom(client.RoomID, client.UserID)
+	client.Role = string(role)
 	client.CanSpeak = canSpeak
 
-	// Create room if doesn't exist
 	if h.Rooms[client.RoomID] == nil {
 		h.Rooms[client.RoomID] = make(map[*Client]bool)
-		log.Printf("🏠 Created new room: %s", client.RoomID)
+		log.Printf("🏠 Room created: %s", client.RoomID)
 	}
 
-	// Add client to room
 	h.Rooms[client.RoomID][client] = true
 
-	log.Printf("✅ Client registered: user=%s, room=%s, role=%s, can_speak=%v, total_in_room=%d",
-		client.UserID, client.RoomID, client.Role, client.CanSpeak, len(h.Rooms[client.RoomID]))
+	log.Printf("✅ WS join: user=%s role=%s room=%s total=%d",
+		client.UserID,
+		client.Role,
+		client.RoomID,
+		len(h.Rooms[client.RoomID]),
+	)
 
-	// Update user presence in database
+	// Presence online
 	go h.updatePresence(client.UserID, "online", &client.RoomID)
 
-	// ✅ Broadcast user joined event
+	// 🔔 USER JOINED EVENT
 	h.broadcastToRoom(client.RoomID, Message{
 		Type:   "user_joined",
 		RoomID: client.RoomID,
 		From:   client.UserID,
 		Data: map[string]interface{}{
 			"user_id":  client.UserID,
-			"username": client.Username, // Set from client
+			"username": client.Username,
 			"role":     client.Role,
 			"can_speak": client.CanSpeak,
 		},
 	}, nil)
 
-	// Send current room state to new client
+	// Kirim state room ke client baru
 	h.sendRoomState(client)
 
-	// ✅ Update listener count
+	// Update listener count
 	h.broadcastListenerCount(client.RoomID)
 }
 
-// handleUnregister unregisters a client
+/* ================= UNREGISTER ================= */
+
 func (h *Hub) handleUnregister(client *Client) {
-	if clients, ok := h.Rooms[client.RoomID]; ok {
-		if _, exists := clients[client]; exists {
-			delete(clients, client)
-			close(client.Send)
+	clients, ok := h.Rooms[client.RoomID]
+	if !ok {
+		return
+	}
 
-			log.Printf("🔌 Client unregistered: user=%s, room=%s, remaining=%d",
-				client.UserID, client.RoomID, len(clients))
+	if _, exists := clients[client]; !exists {
+		return
+	}
 
-			// Update presence
-			go h.updatePresence(client.UserID, "offline", nil)
+	delete(clients, client)
+	close(client.Send)
 
-			// ✅ Broadcast user left event
-			h.broadcastToRoom(client.RoomID, Message{
-				Type:   "user_left",
-				RoomID: client.RoomID,
-				From:   client.UserID,
-				Data: map[string]interface{}{
-					"user_id":  client.UserID,
-					"username": client.Username,
-					"role":     client.Role,
-				},
-			}, nil)
+	log.Printf("❌ WS leave: user=%s room=%s remaining=%d",
+		client.UserID,
+		client.RoomID,
+		len(clients),
+	)
 
-			// ✅ Update listener count
-			h.broadcastListenerCount(client.RoomID)
+	go h.updatePresence(client.UserID, "offline", nil)
 
-			// Clean up empty room
-			if len(clients) == 0 {
-				delete(h.Rooms, client.RoomID)
-				log.Printf("🗑️  Removed empty room: %s", client.RoomID)
-			}
-		}
+	// 🔔 USER LEFT EVENT
+	h.broadcastToRoom(client.RoomID, Message{
+		Type:   "user_left",
+		RoomID: client.RoomID,
+		From:   client.UserID,
+		Data: map[string]interface{}{
+			"user_id":  client.UserID,
+			"username": client.Username,
+			"role":     client.Role,
+		},
+	}, nil)
+
+	h.broadcastListenerCount(client.RoomID)
+
+	if len(clients) == 0 {
+		delete(h.Rooms, client.RoomID)
+		log.Printf("🗑️ Room removed: %s", client.RoomID)
 	}
 }
 
-// handleBroadcast broadcasts a message to the appropriate recipients
-func (h *Hub) handleBroadcast(message Message) {
-	// Validate message has required fields
-	if message.RoomID == "" {
-		log.Printf("⚠️ Broadcast message missing room_id")
+/* ================= BROADCAST ================= */
+
+func (h *Hub) handleBroadcast(msg Message) {
+	if msg.RoomID == "" {
+		log.Println("⚠️ WS broadcast missing room_id")
 		return
 	}
 
-	// Get room clients
-	clients, ok := h.Rooms[message.RoomID]
+	clients, ok := h.Rooms[msg.RoomID]
 	if !ok {
-		log.Printf("⚠️ Broadcast to non-existent room: %s", message.RoomID)
 		return
 	}
 
-	// ✅ Handle different message types
-	switch message.Type {
-	case "chat":
-		// Chat messages go to everyone
-		h.broadcastToRoom(message.RoomID, message, nil)
-		log.Printf("💬 Chat message: room=%s, from=%s", message.RoomID, message.From)
+	switch msg.Type {
 
+	// 💬 CHAT (pakai Data)
+	case "chat":
+		h.broadcastToRoom(msg.RoomID, msg, nil)
+		log.Printf("💬 Chat: room=%s from=%s", msg.RoomID, msg.From)
+
+	// 🔊 AUDIO (pakai Payload)
 	case "audio":
-		// Audio doesn't go back to sender
-		for client := range clients {
-			if client.UserID == message.From {
+		for c := range clients {
+			if c.UserID == msg.From {
 				continue
 			}
 			select {
-			case client.Send <- message:
+			case c.Send <- msg:
 			default:
-				close(client.Send)
-				delete(clients, client)
+				close(c.Send)
+				delete(clients, c)
 			}
 		}
 
+	// 🎙️ MIC / SPEAKING
 	case "mic_on", "mic_off", "speaking":
-		// Broadcast to all including sender (for UI updates)
-		h.broadcastToRoom(message.RoomID, message, nil)
+		h.broadcastToRoom(msg.RoomID, msg, nil)
+
+	// 🔁 ROLE UPDATED (trigger dari REST API)
+	case "role_updated":
+		h.handleRoleUpdated(msg)
 
 	default:
-		// Default: broadcast to all
-		h.broadcastToRoom(message.RoomID, message, nil)
+		h.broadcastToRoom(msg.RoomID, msg, nil)
 	}
 }
 
-// broadcastToRoom sends a message to all clients in a room
-func (h *Hub) broadcastToRoom(roomID string, message Message, excludeClient *Client) {
+/* ================= ROLE UPDATE ================= */
+
+func (h *Hub) handleRoleUpdated(msg Message) {
+	roomID := msg.RoomID
+
 	clients, ok := h.Rooms[roomID]
 	if !ok {
 		return
 	}
 
-	for client := range clients {
-		if excludeClient != nil && client == excludeClient {
+	userID, _ := msg.Data["user_id"].(string)
+	newRole, _ := msg.Data["role"].(string)
+
+	for c := range clients {
+		if c.UserID == userID {
+			c.Role = newRole
+			c.CanSpeak = newRole == "host" || newRole == "speaker"
+		}
+	}
+
+	h.broadcastToRoom(roomID, msg, nil)
+}
+
+/* ================= HELPERS ================= */
+
+func (h *Hub) broadcastToRoom(roomID string, msg Message, exclude *Client) {
+	clients := h.Rooms[roomID]
+
+	for c := range clients {
+		if exclude != nil && c == exclude {
 			continue
 		}
-
 		select {
-		case client.Send <- message:
+		case c.Send <- msg:
 		default:
-			close(client.Send)
-			delete(clients, client)
+			close(c.Send)
+			delete(clients, c)
 		}
 	}
 }
 
-// ✅ NEW: Broadcast listener count
 func (h *Hub) broadcastListenerCount(roomID string) {
-	clients, ok := h.Rooms[roomID]
-	if !ok {
-		return
-	}
-
+	clients := h.Rooms[roomID]
 	count := len(clients)
 
 	h.broadcastToRoom(roomID, Message{
@@ -221,20 +231,15 @@ func (h *Hub) broadcastListenerCount(roomID string) {
 	}, nil)
 }
 
-// sendRoomState sends current room participants to a newly joined client
 func (h *Hub) sendRoomState(client *Client) {
-	clients, ok := h.Rooms[client.RoomID]
-	if !ok {
-		return
-	}
+	clients := h.Rooms[client.RoomID]
 
-	var participants []map[string]interface{}
+	var list []map[string]interface{}
 	for c := range clients {
 		if c.UserID == client.UserID {
-			continue // Skip self
+			continue
 		}
-
-		participants = append(participants, map[string]interface{}{
+		list = append(list, map[string]interface{}{
 			"user_id":   c.UserID,
 			"username":  c.Username,
 			"role":      c.Role,
@@ -242,36 +247,29 @@ func (h *Hub) sendRoomState(client *Client) {
 		})
 	}
 
-	// Send room state to client
-	select {
-	case client.Send <- Message{
+	client.Send <- Message{
 		Type:   "room_state",
 		RoomID: client.RoomID,
 		Data: map[string]interface{}{
-			"participants": participants,
+			"participants": list,
 			"total":        len(clients),
 		},
-	}:
-		log.Printf("📋 Sent room state to user %s: %d participants", client.UserID, len(participants))
-	default:
-		log.Printf("⚠️ Failed to send room state to user %s", client.UserID)
 	}
 }
 
-// cleanupStaleConnections removes connections that haven't been active
-func (h *Hub) cleanupStaleConnections() {
-	// Placeholder for future ping/pong mechanism
-}
+/* ================= PRESENCE ================= */
 
-// updatePresence updates user presence in database
 func (h *Hub) updatePresence(userID, status string, roomID *string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	_, err := db.Pool.Exec(ctx, `
-		INSERT INTO public.user_presence (user_id, status, current_room_id, last_seen, updated_at)
-		VALUES ($1::uuid, $2, $3, NOW(), NOW())
-		ON CONFLICT (user_id) DO UPDATE SET
+		INSERT INTO public.user_presence
+			(user_id, status, current_room_id, last_seen, updated_at)
+		VALUES
+			($1::uuid, $2, $3, NOW(), NOW())
+		ON CONFLICT (user_id)
+		DO UPDATE SET
 			status = EXCLUDED.status,
 			current_room_id = EXCLUDED.current_room_id,
 			last_seen = NOW(),
@@ -279,32 +277,6 @@ func (h *Hub) updatePresence(userID, status string, roomID *string) {
 	`, userID, status, roomID)
 
 	if err != nil {
-		log.Printf("⚠️ Failed to update presence for user %s: %v", userID, err)
+		log.Printf("⚠️ Presence update failed: %v", err)
 	}
-}
-
-// GetRoomClientCount returns number of clients in a room
-func (h *Hub) GetRoomClientCount(roomID string) int {
-	if clients, ok := h.Rooms[roomID]; ok {
-		return len(clients)
-	}
-	return 0
-}
-
-// GetTotalClients returns total number of connected clients
-func (h *Hub) GetTotalClients() int {
-	total := 0
-	for _, clients := range h.Rooms {
-		total += len(clients)
-	}
-	return total
-}
-
-// GetRoomList returns list of active room IDs
-func (h *Hub) GetRoomList() []string {
-	rooms := make([]string, 0, len(h.Rooms))
-	for roomID := range h.Rooms {
-		rooms = append(rooms, roomID)
-	}
-	return rooms
 }

@@ -2,15 +2,6 @@
 
 import { useParams, useRouter } from "next/navigation"
 import { useEffect, useState, useCallback, useRef } from "react"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { AudioMeter } from "@/components/audio-meter"
-import { AudioDeviceSelector } from "@/components/audio-device-selector"
-import { VolumeControl } from "@/components/volume-control"
-import { UserAvatar } from "@/components/user-avatar"
-import { InviteFriendsModal } from "@/components/invite-friends-modal"
-import { LiveChat } from "@/components/live-chat"
 import {
   Mic,
   MicOff,
@@ -20,27 +11,41 @@ import {
   UserPlus,
   Settings,
 } from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { AudioMeter } from "@/components/audio-meter"
+import { AudioDeviceSelector } from "@/components/audio-device-selector"
+import { VolumeControl } from "@/components/volume-control"
+import { UserAvatar } from "@/components/user-avatar"
+import { InviteFriendsModal } from "@/components/invite-friends-modal"
+import { LiveChat } from "@/components/live-chat"
+
 import { useUser } from "@/hooks/use-user"
-import {
-  getRoomDetails,
-  endRoom,
-  getParticipantsWithProfiles,
-  makeSpeaker,
-} from "@/lib/api/rooms"
+import { usePresence } from "@/hooks/use-presence"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
+
+import {
+  getRoomDetails,
+  getParticipantsWithProfiles,
+  makeSpeaker,
+  endRoom,
+} from "@/lib/api/rooms"
+
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 import type { ChatMessage } from "@/app/types/chat"
-import { usePresence } from "@/hooks/use-presence"
+
+/* ======================================================= */
 
 export default function RoomPage() {
-  /* ================= BASIC ================= */
   const params = useParams()
   const router = useRouter()
   const { user } = useUser()
-  const roomId = params?.roomId as string | undefined
 
+  const roomId = params?.roomId as string | undefined
   usePresence({ roomId })
 
   /* ================= STATE ================= */
@@ -65,36 +70,34 @@ export default function RoomPage() {
 
   /* ================= LOAD ROOM ================= */
   useEffect(() => {
-  if (!roomId || !user) return
+    if (!roomId || !user) return
 
-  // 🔒 KUNCI: salin ke const lokal
-  const safeRoomId = roomId
-  const safeUser = user
+    const safeRoomId = roomId
+    const safeUser = user
 
-  async function loadRoom() {
-    try {
-      const data = await getRoomDetails(safeRoomId)
-      setRoom(data)
+    async function loadRoom() {
+      try {
+        const data = await getRoomDetails(safeRoomId)
+        setRoom(data)
 
-      const profiles = await getParticipantsWithProfiles(safeRoomId)
-      setParticipants(profiles.participants)
-      setParticipantCount(profiles.participants.length)
+        const profiles = await getParticipantsWithProfiles(safeRoomId)
+        setParticipants(profiles.participants)
+        setParticipantCount(profiles.participants.length)
 
-      const me = data.participants.find(
-        (p) => p.user_id === safeUser.id
-      )
-      if (me) setMyRole(me.role)
+        const me = data.participants.find(
+          (p) => p.user_id === safeUser.id
+        )
+        if (me) setMyRole(me.role)
 
-      setRoomLoaded(true)
-    } catch (err) {
-      console.error("Failed to load room:", err)
-      router.push("/")
+        setRoomLoaded(true)
+      } catch (err) {
+        console.error("Failed to load room:", err)
+        router.push("/")
+      }
     }
-  }
 
-  loadRoom()
-}, [roomId, user, router])
-
+    loadRoom()
+  }, [roomId, user, router])
 
   /* ================= WEBSOCKET ================= */
   const handleWSMessage = useCallback(
@@ -103,25 +106,49 @@ export default function RoomPage() {
       const payload = message.payload
       if (!payload) return
 
-      if (message.type === "chat") {
-        if (payload.user_id === user.id) return
+      switch (message.type) {
+        case "chat": {
+          if (payload.user_id === user.id) return
+          if (typeof payload.content !== "string") return
 
-        const content =
-          typeof payload.content === "string" ? payload.content : ""
-        if (!content) return
+          const chat: ChatMessage = {
+            id: payload.message_id ?? crypto.randomUUID(),
+            type: "chat",
+            username: payload.username ?? "User",
+            content: payload.content,
+            timestamp: new Date(payload.timestamp ?? Date.now()),
+            avatar_url: payload.avatar_url,
+            role: (payload.role as Role) ?? "listener",
+            user_id: payload.user_id,
+          }
 
-        const chat: ChatMessage = {
-          id: payload.message_id ?? crypto.randomUUID(),
-          type: "chat",
-          username: payload.username ?? "User",
-          content,
-          timestamp: new Date(payload.timestamp ?? Date.now()),
-          avatar_url: payload.avatar_url,
-          role: (payload.role as Role) ?? "listener",
-          user_id: payload.user_id ?? "unknown",
+          setChatMessages((prev) => [...prev, chat])
+          break
         }
 
-        setChatMessages((prev) => [...prev, chat])
+        case "role_updated": {
+          if (!payload.user_id || !payload.role) return
+          const role = payload.role as Role
+
+          setParticipants((prev) =>
+            prev.map((p) =>
+              p.user_id === payload.user_id ? { ...p, role } : p
+            )
+          )
+
+          if (payload.user_id === user.id) {
+            setMyRole(role)
+          }
+          break
+        }
+
+        case "user_joined":
+          setParticipantCount((p) => p + 1)
+          break
+
+        case "user_left":
+          setParticipantCount((p) => Math.max(0, p - 1))
+          break
       }
     },
     [user]
@@ -171,7 +198,7 @@ export default function RoomPage() {
     router.push("/")
   }
 
-  /* ================= RENDER GUARD (AMAN) ================= */
+  /* ================= RENDER GUARD ================= */
   if (!roomId || !user || !room) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -291,6 +318,7 @@ export default function RoomPage() {
               const text = content.trim()
               if (!text) return
 
+              // local echo
               setChatMessages((prev) => [
                 ...prev,
                 {

@@ -1,4 +1,4 @@
-// backend/ws/client.go - FIXED (Proper map initialization)
+// backend/ws/client.go - FINAL & STABLE
 package ws
 
 import (
@@ -12,87 +12,104 @@ type Client struct {
 	Conn     *websocket.Conn
 	Send     chan Message
 	UserID   string
-	Username string // Store username for chat
+	Username string
 	RoomID   string
-	Role     string // "host" | "speaker" | "listener"
-	CanSpeak bool   // Derived from Role
+	Role     string // "host" | "speaker" | "listener" (SET BY HUB)
+	CanSpeak bool   // derived from Role (SET BY HUB)
 }
 
-// WritePump pumps messages from the hub to the websocket connection
+/* ================= WRITE ================= */
+
+// WritePump sends messages from hub to websocket
 func (c *Client) WritePump() {
 	defer func() {
 		c.Conn.Close()
-		log.Printf("🔌 WritePump closed for user %s in room %s", c.UserID, c.RoomID)
+		log.Printf("🔌 WritePump closed: user=%s room=%s", c.UserID, c.RoomID)
 	}()
 
 	for msg := range c.Send {
 		if err := c.Conn.WriteJSON(msg); err != nil {
-			log.Printf("❌ WriteJSON error for user %s: %v", c.UserID, err)
+			log.Printf("❌ WriteJSON error: user=%s err=%v", c.UserID, err)
 			return
 		}
 	}
 }
 
-// ReadPump pumps messages from the websocket connection to the hub
+/* ================= READ ================= */
+
+// ReadPump reads messages from websocket and forwards to hub
 func (c *Client) ReadPump(hub *Hub) {
 	defer func() {
 		hub.Unregister <- c
 		c.Conn.Close()
-		log.Printf("🔌 ReadPump closed for user %s in room %s", c.UserID, c.RoomID)
+		log.Printf("🔌 ReadPump closed: user=%s room=%s", c.UserID, c.RoomID)
 	}()
 
 	for {
 		var msg Message
 		if err := c.Conn.ReadJSON(&msg); err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("⚠️ Unexpected close error: %v", err)
+			if websocket.IsUnexpectedCloseError(
+				err,
+				websocket.CloseGoingAway,
+				websocket.CloseAbnormalClosure,
+			) {
+				log.Printf("⚠️ WS close error: %v", err)
 			}
 			return
 		}
 
-		// Set metadata
+		// 🔒 Always set server-controlled fields
 		msg.RoomID = c.RoomID
 		msg.From = c.UserID
 
-		// ✅ FIXED: Initialize Data map if nil, then add username
+		// Ensure Data map exists
+		if msg.Data == nil {
+			msg.Data = make(map[string]interface{})
+		}
+
+		/* ================= CHAT ================= */
 		if msg.Type == "chat" {
-			// Initialize map if it's nil
-			if msg.Data == nil {
-				msg.Data = make(map[string]interface{})
+			// Normalize content
+			content, ok := msg.Data["content"].(string)
+			if !ok || content == "" {
+				// ignore empty / invalid chat
+				continue
 			}
-			// Now we can safely add to it
-			msg.Data["username"] = c.Username
-			msg.Data["user_id"] = c.UserID
-			msg.Data["role"] = c.Role
+
+			msg.Data = map[string]interface{}{
+				"content":  content,
+				"user_id":  c.UserID,
+				"username": c.Username,
+				// ⛔ role JANGAN dikirim dari client
+				// role authoritative via hub (role_updated)
+			}
 		}
 
-		// ✅ FIXED: Same for speaking events
+		/* ================= MIC / SPEAK ================= */
 		if msg.Type == "mic_on" || msg.Type == "mic_off" || msg.Type == "speaking" {
-			// Initialize map if it's nil
-			if msg.Data == nil {
-				msg.Data = make(map[string]interface{})
+			msg.Data = map[string]interface{}{
+				"user_id":  c.UserID,
+				"username": c.Username,
 			}
-			// Now we can safely add to it
-			msg.Data["username"] = c.Username
-			msg.Data["user_id"] = c.UserID
-			msg.Data["role"] = c.Role
 		}
 
-		// Validate permissions
+		/* ================= PERMISSION CHECK ================= */
 		if !c.validateMessagePermission(msg.Type) {
-			log.Printf("⛔ User %s (%s) tried to send unauthorized message type: %s",
-				c.UserID, c.Role, msg.Type)
+			log.Printf(
+				"⛔ Unauthorized message: user=%s role=%s type=%s",
+				c.UserID, c.Role, msg.Type,
+			)
 			continue
 		}
 
-		// Broadcast to hub
+		// Send to hub
 		hub.Broadcast <- msg
 	}
 }
 
-// validateMessagePermission checks if client has permission to send this message type
+/* ================= PERMISSIONS ================= */
+
 func (c *Client) validateMessagePermission(msgType string) bool {
-	// Audio messages require CanSpeak permission
 	audioMessages := map[string]bool{
 		"audio":    true,
 		"mic_on":   true,
@@ -104,11 +121,10 @@ func (c *Client) validateMessagePermission(msgType string) bool {
 		return c.CanSpeak
 	}
 
-	// Chat messages - everyone can send
+	// Everyone can chat
 	if msgType == "chat" {
-		return true // Or restrict to canSpeak if you want only speakers to chat
+		return true
 	}
 
-	// All other messages are allowed
 	return true
 }
