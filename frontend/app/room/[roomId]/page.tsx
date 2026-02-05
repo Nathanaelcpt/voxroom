@@ -20,6 +20,7 @@ import {
   UserPlus,
   Settings,
 } from "lucide-react"
+
 import { useUser } from "@/hooks/use-user"
 import {
   getRoomDetails,
@@ -29,13 +30,16 @@ import {
 } from "@/lib/api/rooms"
 import { useWebSocket } from "@/hooks/use-websocket"
 import { useAudioStream } from "@/hooks/use-audio-stream"
+import { usePresence } from "@/hooks/use-presence"
+
 import type { RoomDetail, Participant, Role } from "@/app/types/room"
 import type { WSMessage } from "@/app/types/websocket"
 import type { ChatMessage } from "@/app/types/chat"
-import { usePresence } from "@/hooks/use-presence"
+
+/* ===================================================== */
 
 export default function RoomPage() {
-  /* ================= BASIC HOOKS ================= */
+  /* ================= BASIC ================= */
   const params = useParams()
   const router = useRouter()
   const { user } = useUser()
@@ -64,7 +68,21 @@ export default function RoomPage() {
     ((userId: string, audioData: ArrayBuffer) => void) | null
   >(null)
 
+  /* ================= HELPERS ================= */
+
+  const resolveRole = useCallback(
+    (userId?: string): Role => {
+      if (!userId) return "listener"
+      return (
+        participants.find((p) => p.user_id === userId)?.role ??
+        "listener"
+      )
+    },
+    [participants]
+  )
+
   /* ================= LOAD ROOM ================= */
+
   useEffect(() => {
     if (!roomId || !user) {
       setLoading(false)
@@ -101,6 +119,7 @@ export default function RoomPage() {
   }, [roomId, user, router])
 
   /* ================= WEBSOCKET ================= */
+
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
       const payload = message.payload
@@ -133,6 +152,7 @@ export default function RoomPage() {
 
         case "chat": {
           if (!payload.content) return
+
           const msg: ChatMessage = {
             id: payload.message_id || crypto.randomUUID(),
             type: "chat",
@@ -140,9 +160,10 @@ export default function RoomPage() {
             content: payload.content,
             timestamp: new Date(payload.timestamp || Date.now()),
             avatar_url: payload.avatar_url,
-            role: (payload.role as Role) || "listener",
+            role: resolveRole(payload.user_id),
             user_id: payload.user_id,
           }
+
           setChatMessages((prev) => [...prev, msg])
           break
         }
@@ -159,7 +180,7 @@ export default function RoomPage() {
           break
       }
     },
-    [user]
+    [user, resolveRole]
   )
 
   const { isConnected, send, sendAudioChunk } = useWebSocket({
@@ -168,6 +189,7 @@ export default function RoomPage() {
   })
 
   /* ================= AUDIO ================= */
+
   const {
     isCapturing,
     mediaStream,
@@ -187,6 +209,7 @@ export default function RoomPage() {
   }, [playAudioChunk])
 
   /* ================= ACTIONS ================= */
+
   function handleToggleMic() {
     if (!canSpeak) return
     const next = !isMuted
@@ -199,10 +222,6 @@ export default function RoomPage() {
     await makeSpeaker(roomId, userId)
   }
 
-  async function handleInviteFriend(userId: string) {
-    console.log("Invite:", userId)
-  }
-
   async function handleEndRoom() {
     if (!isHost || !roomId) return
     if (!confirm("Yakin ingin mengakhiri room?")) return
@@ -210,10 +229,9 @@ export default function RoomPage() {
     router.push("/")
   }
 
-  /* ================= RENDER GUARD (AMAN) ================= */
-  const isReady = !loading && room && roomId && user
+  /* ================= RENDER GUARD ================= */
 
-  if (!isReady) {
+  if (!room || !roomId || !user || loading) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
@@ -222,6 +240,7 @@ export default function RoomPage() {
   }
 
   /* ================= UI ================= */
+
   return (
     <div className="min-h-screen p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -299,18 +318,20 @@ export default function RoomPage() {
         )}
 
         <div className="grid md:grid-cols-3 gap-6">
-          {/* STAGE */}
-          <Card className="md:col-span-2">
+          {/* LIVE STAGE */}
+          <Card className="md:col-span-2 min-h-105">
             <CardHeader>
               <CardTitle>Live Stage</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-6 text-center">
+
+            <CardContent className="flex flex-col items-center justify-center gap-6 h-full">
               <UserAvatar user={user} size="lg" />
-              <Badge>{myRole}</Badge>
+              <Badge className="capitalize">{myRole}</Badge>
 
               {canSpeak && (
                 <Button
                   size="lg"
+                  className="rounded-full h-16 w-16"
                   variant={isMuted ? "destructive" : "default"}
                   onClick={handleToggleMic}
                 >
@@ -320,7 +341,7 @@ export default function RoomPage() {
             </CardContent>
           </Card>
 
-          {/* CHAT */}
+          {/* LIVE CHAT */}
           <LiveChat
             roomId={roomId}
             currentUserId={user.id}
@@ -349,7 +370,7 @@ export default function RoomPage() {
           onClose={() => setShowInviteModal(false)}
           roomId={roomId}
           roomTitle={room.title}
-          onInvite={handleInviteFriend}
+          onInvite={async () => {}}
         />
       )}
     </div>
