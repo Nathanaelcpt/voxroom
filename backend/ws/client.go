@@ -62,12 +62,17 @@ func (c *Client) ReadPump(hub *Hub) {
 				continue
 			}
 
+			log.Printf("💬 Chat from user=%s (%s): %s", c.Username, c.Role, content)
+
 			msg.Data = map[string]interface{}{
 				"content":   content,
 				"user_id":   c.UserID,
 				"username":  c.Username,
+				"role":      c.Role,        // ✅ TAMBAHKAN INI
 				"timestamp": time.Now().UnixMilli(),
 			}
+			
+			log.Printf("📤 Broadcasting chat to room %s", c.RoomID)
 		}
 
 		/* ===== MIC ===== */

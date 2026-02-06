@@ -138,14 +138,24 @@ func (h *Hub) handleBroadcast(msg Message) {
 
 	// 💬 CHAT → ke semua (TERMASUK sender)
 	case "chat":
+		log.Printf("💬 Broadcasting chat to %d clients in room %s", len(clients), msg.RoomID)
+		
+		sent := 0
+		failed := 0
+		
 		for c := range clients {
 			select {
 			case c.Send <- msg:
+				sent++
 			default:
+				failed++
+				log.Printf("  ❌ Failed to send to user=%s (buffer full)", c.UserID)
 				close(c.Send)
 				delete(clients, c)
 			}
 		}
+		
+		log.Printf("💬 Broadcast complete: sent=%d, failed=%d", sent, failed)
 
 	// 🔊 AUDIO → ke semua KECUALI sender
 	case "audio":
