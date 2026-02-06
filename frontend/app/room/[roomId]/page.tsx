@@ -130,7 +130,10 @@ function RoomPageContent({
       if (message.type === "chat") {
         const data = message.data
         if (!data) return
-        if (data.user_id === user.id) return
+        
+        // ✅ FIX: HAPUS BARIS INI!
+        // ❌ if (data.user_id === user.id) return
+        
         if (typeof data.content !== "string") return
 
         const chat: ChatMessage = {
@@ -143,7 +146,18 @@ function RoomPageContent({
           user_id: data.user_id,
         }
 
-        setChatMessages((prev) => [...prev, chat])
+        // ✅ Cegah duplikasi dengan pengecekan waktu
+        setChatMessages((prev) => {
+          const isDuplicate = prev.some(
+            (msg) =>
+              msg.user_id === chat.user_id &&
+              msg.content === chat.content &&
+              Math.abs(msg.timestamp.getTime() - chat.timestamp.getTime()) < 2000
+          )
+          
+          if (isDuplicate) return prev
+          return [...prev, chat]
+        })
         return
       }
 
@@ -183,13 +197,17 @@ function RoomPageContent({
         if (!playAudioChunkRef.current) return
         if (!message.from) return
 
-        const binary = atob(message.payload.chunk)
-        const bytes = new Uint8Array(binary.length)
-        for (let i = 0; i < binary.length; i++) {
-          bytes[i] = binary.charCodeAt(i)
-        }
+        try {
+          const binary = atob(message.payload.chunk)
+          const bytes = new Uint8Array(binary.length)
+          for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i)
+          }
 
-        playAudioChunkRef.current(message.from, bytes.buffer)
+          playAudioChunkRef.current(message.from, bytes.buffer)
+        } catch (err) {
+          console.error("Error processing audio chunk:", err)
+        }
       }
     },
     [user.id]
@@ -365,7 +383,10 @@ function RoomPageContent({
                 user_id: user.id,
               }
 
+              // ✅ Tambahkan chat ke state lokal (optimistic update)
               setChatMessages((prev) => [...prev, chat])
+              
+              // ✅ Kirim ke server untuk broadcast ke user lain
               send("chat", { content: text })
             }}
           />
