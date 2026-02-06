@@ -3,68 +3,79 @@ package room
 import (
 	"context"
 	"log"
+	"net/http"
+	"strings"
 	"time"
-
+	"voxroom/backend/auth"
 	"voxroom/backend/db"
+	"voxroom/backend/webrtc"
 )
 
-// EndRoom marks a room as ended and updates all participants
-func EndRoom(roomID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func EndRoomHandler(w http.ResponseWriter, r *http.Request) {
+	userID, ok := r.Context().Value(auth.UserIDKey).(string)
+	if !ok || userID == "" {
+		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Extract roomID from path
+	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
+	roomID := strings.TrimSuffix(path, "/end")
+
+	if roomID == "" || roomID == path {
+		writeJSONError(w, "room id required", http.StatusBadRequest)
+		return
+	}
+
+	log.Printf("🔴 User %s ending room %s", userID, roomID)
+
+	// Verify user is host
+	var isHost bool
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	
+	err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM room_participants 
+			WHERE room_id = $1 AND user_id = $2 AND role = 'host'
+		)
+	`, roomID, userID).Scan(&isHost)
 
-	log.Printf("🔴 Ending room: %s", roomID)
-
-	// Use transaction for consistency
-	tx, err := db.Pool.Begin(ctx)
-	if err != nil {
-		log.Printf("❌ EndRoom: failed to begin transaction for room %s: %v", roomID, err)
-		return err
-	}
-	defer tx.Rollback(ctx)
-
-	// 1. Update room status
-	result, err := tx.Exec(ctx, `
-		UPDATE rooms
-		SET is_live = false,
-		    ended_at = NOW(),
-		    updated_at = NOW()
-		WHERE id = $1 AND is_live = true
-	`, roomID)
-
-	if err != nil {
-		log.Printf("❌ EndRoom: failed to update room %s: %v", roomID, err)
-		return err
+	if err != nil || !isHost {
+		writeJSONError(w, "only host can end room", http.StatusForbidden)
+		return
 	}
 
-	rowsAffected := result.RowsAffected()
-	if rowsAffected == 0 {
-		log.Printf("⚠️ EndRoom: room %s was already ended or doesn't exist", roomID)
-		// Not an error, just log it
+	// Broadcast "room_ended" to all participants
+	if webrtc.GlobalHub != nil {
+		webrtc.GlobalHub.BroadcastToRoom(roomID, webrtc.WSMessage{
+			Type: webrtc.TypeRoomEnded,
+			Data: map[string]interface{}{
+				"room_id": roomID,
+				"message": "Room has been ended by host",
+			},
+		}, "")
 	}
 
-	// 2. Update all active participants
-	result, err = tx.Exec(ctx, `
-		UPDATE room_participants
-		SET left_at = NOW()
-		WHERE room_id = $1 AND left_at IS NULL
-	`, roomID)
-
-	if err != nil {
-		log.Printf("❌ EndRoom: failed to update participants for room %s: %v", roomID, err)
-		return err
+	// End room in database (fungsi ini ada di handler.go)
+	if err := EndRoom(roomID); err != nil {
+		log.Printf("❌ Failed to end room: %v", err)
+		writeJSONError(w, "failed to end room", http.StatusInternalServerError)
+		return
 	}
 
-	participantsUpdated := result.RowsAffected()
-
-	// 3. Commit transaction
-	if err := tx.Commit(ctx); err != nil {
-		log.Printf("❌ EndRoom: failed to commit transaction for room %s: %v", roomID, err)
-		return err
+	// Close all WebSocket connections after delay
+	if webrtc.GlobalHub != nil {
+		go func() {
+			time.Sleep(2 * time.Second)
+			webrtc.GlobalHub.CloseRoom(roomID)
+		}()
 	}
 
-	log.Printf("✅ Room ended successfully: room=%s, participants_updated=%d", 
-		roomID, participantsUpdated)
-
-	return nil
+	log.Printf("✅ Room ended successfully: %s", roomID)
+	
+	writeJSON(w, map[string]string{
+		"message": "Room ended successfully",
+		"room_id": roomID,
+	})
 }

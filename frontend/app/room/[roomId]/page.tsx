@@ -21,6 +21,8 @@ import { VolumeControl } from "@/components/volume-control"
 import { UserAvatar } from "@/components/user-avatar"
 import { InviteFriendsModal } from "@/components/invite-friends-modal"
 import { LiveChat } from "@/components/live-chat"
+import { RoomEndedModal } from "@/components/room-ended-modal"
+import { EndRoomConfirmModal } from "@/components/end-room-confirm-modal"
 
 import { useUser } from "@/hooks/use-user"
 import { usePresence } from "@/hooks/use-presence"
@@ -87,6 +89,9 @@ function RoomPageContent({
 
   const [showSettings, setShowSettings] = useState(false)
   const [showInviteModal, setShowInviteModal] = useState(false)
+  const [showEndRoomConfirm, setShowEndRoomConfirm] = useState(false)
+  const [showRoomEnded, setShowRoomEnded] = useState(false)
+  
   const [playbackVolume, setPlaybackVolume] = useState(1)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
 
@@ -126,15 +131,26 @@ function RoomPageContent({
   /* ================= WEBSOCKET ================= */
   const handleWSMessage = useCallback(
     (message: WSMessage) => {
+      console.log("📨 WS Message received:", message) // ✅ DEBUG
+
       /* ===== CHAT ===== */
       if (message.type === "chat") {
         const data = message.data
-        if (!data) return
+        if (!data) {
+          console.log("❌ No data in chat message")
+          return
+        }
         
-        // ✅ FIX: HAPUS BARIS INI!
-        // ❌ if (data.user_id === user.id) return
-        
-        if (typeof data.content !== "string") return
+        if (typeof data.content !== "string") {
+          console.log("❌ Content is not string:", data.content)
+          return
+        }
+
+        console.log("✅ Processing chat:", {
+          from: data.user_id,
+          content: data.content,
+          username: data.username,
+        })
 
         const chat: ChatMessage = {
           id: crypto.randomUUID(),
@@ -143,19 +159,26 @@ function RoomPageContent({
           content: data.content,
           timestamp: new Date(),
           role: (data.role as Role) ?? "listener",
-          user_id: data.user_id,
+          user_id: data.user_id ?? "",
         }
 
-        // ✅ Cegah duplikasi dengan pengecekan waktu
+        // ✅ FIX: Cek duplikasi berdasarkan content + user_id saja
+        // JANGAN cek timestamp karena akan selalu berbeda!
         setChatMessages((prev) => {
-          const isDuplicate = prev.some(
+          // Cek apakah ada message dengan content dan user yang sama dalam 3 detik terakhir
+          const recentDuplicate = prev.find(
             (msg) =>
               msg.user_id === chat.user_id &&
               msg.content === chat.content &&
-              Math.abs(msg.timestamp.getTime() - chat.timestamp.getTime()) < 2000
+              Date.now() - msg.timestamp.getTime() < 3000
           )
           
-          if (isDuplicate) return prev
+          if (recentDuplicate) {
+            console.log("⚠️ Duplicate detected, skipping")
+            return prev
+          }
+
+          console.log("✅ Adding chat to messages")
           return [...prev, chat]
         })
         return
@@ -182,12 +205,21 @@ function RoomPageContent({
 
       /* ===== USER JOIN / LEAVE ===== */
       if (message.type === "user_joined") {
+        console.log("👋 User joined")
         setParticipantCount((p) => p + 1)
         return
       }
 
       if (message.type === "user_left") {
+        console.log("👋 User left")
         setParticipantCount((p) => Math.max(0, p - 1))
+        return
+      }
+
+      /* ===== ROOM ENDED ===== */
+      if (message.type === "room_ended") {
+        console.log("🔴 Room ended by host")
+        setShowRoomEnded(true)
         return
       }
 
@@ -250,11 +282,21 @@ function RoomPageContent({
     await makeSpeaker(roomId, userId)
   }
 
-  async function handleEndRoom() {
-    if (!isHost) return
-    if (!confirm("Yakin ingin mengakhiri room?")) return
-    await endRoom(roomId)
-    router.push("/")
+  function handleRequestEndRoom() {
+    setShowEndRoomConfirm(true)
+  }
+
+  async function handleConfirmEndRoom() {
+    try {
+      await endRoom(roomId)
+      setShowEndRoomConfirm(false)
+      // Broadcast ke semua user
+      send("room_ended", {})
+      // Redirect host ke home
+      router.push("/")
+    } catch (err) {
+      console.error("Failed to end room:", err)
+    }
   }
 
   if (!room) return null
@@ -295,7 +337,7 @@ function RoomPageContent({
             </Button>
 
             {isHost && (
-              <Button variant="destructive" onClick={handleEndRoom}>
+              <Button variant="destructive" onClick={handleRequestEndRoom}>
                 End Room
               </Button>
             )}
@@ -370,6 +412,8 @@ function RoomPageContent({
               const text = content.trim()
               if (!text) return
 
+              console.log("💬 Sending chat:", text) // ✅ DEBUG
+
               const chat: ChatMessage = {
                 id: crypto.randomUUID(),
                 type: "chat",
@@ -387,21 +431,44 @@ function RoomPageContent({
               setChatMessages((prev) => [...prev, chat])
               
               // ✅ Kirim ke server untuk broadcast ke user lain
-              send("chat", { content: text })
+              console.log("📤 Broadcasting chat to WebSocket") // ✅ DEBUG
+              send("chat", { 
+                content: text,
+                username: chat.username,
+                role: myRole,
+                user_id: user.id,
+              })
             }}
           />
         </div>
       </div>
 
+      {/* MODALS */}
       {isHost && (
-        <InviteFriendsModal
-          open={showInviteModal}
-          onClose={() => setShowInviteModal(false)}
-          roomId={roomId}
-          roomTitle={room.title}
-          onInvite={async () => {}}
-        />
+        <>
+          <InviteFriendsModal
+            open={showInviteModal}
+            onClose={() => setShowInviteModal(false)}
+            roomId={roomId}
+            roomTitle={room.title}
+            onInvite={async () => {}}
+          />
+
+          <EndRoomConfirmModal
+            open={showEndRoomConfirm}
+            roomTitle={room.title}
+            participantCount={participantCount}
+            onConfirm={handleConfirmEndRoom}
+            onCancel={() => setShowEndRoomConfirm(false)}
+          />
+        </>
       )}
+
+      <RoomEndedModal
+        open={showRoomEnded}
+        roomTitle={room.title}
+        onClose={() => setShowRoomEnded(false)}
+      />
     </div>
   )
 }

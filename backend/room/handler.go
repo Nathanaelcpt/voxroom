@@ -345,54 +345,42 @@ func JoinRoom(w http.ResponseWriter, r *http.Request) {
 }
 
 /* =======================
-   END ROOM (HTTP Handler)
+   End Room
 ======================= */
 
-func EndRoomHandler(w http.ResponseWriter, r *http.Request) {
-	userID, ok := r.Context().Value(auth.UserIDKey).(string)
-	if !ok || userID == "" {
-		writeJSONError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Extract roomID from path: /rooms/{id}/end
-	path := strings.TrimPrefix(r.URL.Path, "/rooms/")
-	roomID := strings.TrimSuffix(path, "/end")
-
-	if roomID == "" || roomID == path {
-		writeJSONError(w, "room id required", http.StatusBadRequest)
-		return
-	}
-
-	log.Printf("🔴 User %s ending room %s", userID, roomID)
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+// EndRoom marks a room as ended in the database
+func EndRoom(roomID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Verify user is host
-	var isHost bool
-	err := db.Pool.QueryRow(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM room_participants 
-			WHERE room_id = $1 AND user_id = $2 AND role = 'host'
-		)
-	`, roomID, userID).Scan(&isHost)
+	log.Printf("🔴 Ending room in database: %s", roomID)
 
-	if err != nil || !isHost {
-		writeJSONError(w, "only host can end room", http.StatusForbidden)
-		return
+	// Update room status
+	_, err := db.Pool.Exec(ctx, `
+		UPDATE rooms 
+		SET is_live = false, ended_at = NOW() 
+		WHERE id = $1
+	`, roomID)
+
+	if err != nil {
+		log.Printf("❌ Failed to update room status: %v", err)
+		return err
 	}
 
-	// End the room
-	if err := EndRoom(roomID); err != nil {
-		writeJSONError(w, "failed to end room", http.StatusInternalServerError)
-		return
+	// Mark all participants as left
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE room_participants 
+		SET left_at = NOW() 
+		WHERE room_id = $1 AND left_at IS NULL
+	`, roomID)
+
+	if err != nil {
+		log.Printf("❌ Failed to mark participants as left: %v", err)
+		return err
 	}
 
-	writeJSON(w, map[string]string{
-		"status":  "ended",
-		"room_id": roomID,
-	})
+	log.Printf("✅ Room ended successfully: %s", roomID)
+	return nil
 }
 
 /* =======================
